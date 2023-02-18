@@ -86,7 +86,7 @@ def get_args_parser():
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
-    parser.add_argument('--device', default='cuda',
+    parser.add_argument('--device', default='cpu',
                         help='device to use for training / testing')
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--resume', default='', help='resume from checkpoint')
@@ -194,7 +194,7 @@ def main(args):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer, device, epoch,
+            model, criterion, postprocessors, data_loader_train, optimizer, device, epoch,
             args.clip_max_norm)
         lr_scheduler.step()
         if args.output_dir:

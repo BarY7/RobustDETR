@@ -2,21 +2,26 @@
 """
 Train and eval functions used in main.py
 """
+from typing import Dict
 import math
 import os
 import sys
 from typing import Iterable
 
 import torch
+from mask_generator import MaskGenerator
+from models.segmentation import PostProcessSegm
 
 import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
+from torch import nn
 
 
-def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
+def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors : Dict[str, nn.Module],
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
+    mask_generator = MaskGenerator(model)
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -24,6 +29,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
+
+    method: str = 'ours'
+    print("using method {0} for visualization".format(method))
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
@@ -33,6 +41,16 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+
+        # feature map space masks 
+        feature_map_relevancy = mask_generator.get_panoptic(samples, targets, method)
+
+        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        results = postprocessors['bbox'](feature_map_relevancy, orig_target_sizes)
+        # if 'segm' in postprocessors.keys():
+        postprocessors['segm'] = PostProcessSegm()
+        target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+        results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)

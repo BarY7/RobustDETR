@@ -1,5 +1,5 @@
 import torch
-from DETR.modules.ExplanationGenerator import Generator, GeneratorAlbationNoAgg
+from modules.modules.ExplanationGenerator import Generator, GeneratorAlbationNoAgg
 import numpy as np
 from PIL import Image
 
@@ -58,7 +58,7 @@ class MaskGenerator:
         im = Image.fromarray(im)
         # im = T.ToPILImage()(samples.tensors[0])
         # convert boxes from [0; 1] to image scales
-        bboxes_scaled = rescale_bboxes(boxes[0, keep], im.size)
+        bboxes_scaled = rescale_bboxes(boxes[0, keep.cpu()], im.size)
         ############ for visualizations
 
 
@@ -151,6 +151,8 @@ class MaskGenerator:
         #     plt.savefig('decoder_visualization/_ours_seg.png')
 
         outputs['pred_masks'] = masks
+
+
 
         return outputs
 
