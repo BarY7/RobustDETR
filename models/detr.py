@@ -5,6 +5,7 @@ DETR model and criterion classes.
 import torch
 import torch.nn.functional as F
 from torch import nn
+from typing import Dict
 
 from util import box_ops
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
@@ -151,7 +152,6 @@ class SetCriterion(nn.Module):
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-
         losses = {}
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
 
@@ -190,6 +190,26 @@ class SetCriterion(nn.Module):
         }
         return losses
 
+    def compute_fg_loss(self, relevance_map, target_seg):
+        pointwise_matrices = torch.mul(relevance_map, target_seg)
+        fg_mse = F.mse_loss(pointwise_matrices, torch.ones_like(pointwise_matrices))
+        return fg_mse
+    def compute_bg_loss(self, relevance_map, target_seg):
+        neg_target_seg = torch.ones_like(target_seg) - target_seg # this should neg the seg matrix
+        pointwise_matrices = torch.mul(relevance_map, neg_target_seg)
+        bg_mse = F.mse_loss(pointwise_matrices, torch.ones_like(pointwise_matrices))
+        return bg_mse
+    def compute_relevance_loss(self,outputs, targets):
+        lamda_fg = 0.25
+        lamga_bg = 0.75
+        fg_loss = self.compute_fg_loss(outputs,targets)
+        bg_loss = self.compute_bg_loss(outputs, targets)
+        relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
+        return relevance_loss
+    def loss_rel_maps(self, outputs, targets, indices, num_boxes):
+        print(5)
+        losses: Dict = {}
+
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
@@ -207,7 +227,8 @@ class SetCriterion(nn.Module):
             'labels': self.loss_labels,
             'cardinality': self.loss_cardinality,
             'boxes': self.loss_boxes,
-            'masks': self.loss_masks
+            'masks': self.loss_masks,
+            'rel_maps' : self.loss_rel_maps
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
@@ -346,6 +367,8 @@ def build(args):
     losses = ['labels', 'boxes', 'cardinality']
     if args.masks:
         losses += ["masks"]
+    if args.rel_maps:
+        losses += ["rel_maps"]
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
     criterion.to(device)

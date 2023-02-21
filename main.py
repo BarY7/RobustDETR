@@ -60,6 +60,10 @@ def get_args_parser():
     parser.add_argument('--masks', action='store_true',
                         help="Train segmentation head if the flag is provided")
 
+    # Relevancy maps fine-tuning
+    parser.add_argument('--rel_maps', action='store_true',
+                        help="Use the relevancy map based loss in training")
+
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")

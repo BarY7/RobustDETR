@@ -16,6 +16,7 @@ import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
 from datasets.panoptic_eval import PanopticEvaluator
 from torch import nn
+import matplotlib.pyplot as plt
 
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors : Dict[str, nn.Module],
@@ -37,7 +38,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
+        outputs = mask_generator.get_panoptic(samples, targets, method)
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
