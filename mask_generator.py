@@ -42,9 +42,49 @@ class MaskGenerator:
         self.abl = GeneratorAlbationNoAgg(model)
         self.model = model
 
-    def get_panoptic(self, samples, targets, method):
-        # propagate through the model
-        outputs = self.model(samples)
+    def get_feature_map_size(self, outputs, samples):
+        # keep only predictions with 0.8+ confidence
+        probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
+        keep = probas.max(-1).values > 0.5
+
+        ########### for visualizations
+        boxes = outputs['pred_boxes'].cpu()
+        im = samples.tensors[0].permute(1, 2, 0).data.cpu().numpy()
+        im = (im - im.min()) / (im.max() - im.min())
+        im = np.uint8(im * 255)
+        im = Image.fromarray(im)
+        # im = T.ToPILImage()(samples.tensors[0])
+        # convert boxes from [0; 1] to image scales
+        bboxes_scaled = rescale_bboxes(boxes[0, keep.cpu()], im.size)
+        ############ for visualizations
+
+
+        if keep.nonzero().shape[0] <= 1:
+            print("no segmentation")
+
+        # use lists to store the outputs via up-values
+        vis_shape, target_shape = [], []
+
+        hooks = [
+            self.model.transformer.register_forward_hook(
+                lambda self, input, output: vis_shape.append(output[1])
+            ),
+            self.model.backbone[-2].register_forward_hook(
+                lambda self, input, output: target_shape.append(output)
+            )
+        ]
+
+        self.model(samples)
+
+        for hook in hooks:
+            hook.remove()
+
+        h, w = vis_shape[0].shape[-2:]
+
+        return h,w
+
+    def get_panoptic_masks(self, outputs, samples,targets,method):
+                # propagate through the model
 
         # keep only predictions with 0.8+ confidence
         probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
@@ -149,11 +189,21 @@ class MaskGenerator:
         #
         #     plt.show()
         #     plt.savefig('decoder_visualization/_ours_seg.png')
+        visualiztion = masks.cpu().numpy()
+        return masks
 
+
+    # Get the explanations
+    def get_panoptic_masks_no_thresholding(self,samples,idx):
+        cam = self.gen.generate_ours(samples, idx, use_lrp=False)
+        cam = (cam - cam.min()) / (cam.max() - cam.min()) \
+              #* 255
+        # * 255 was done to get to image range
+        return cam
+    def get_panoptic(self, samples, targets, method):
+        outputs = self.model(samples)
+        masks = self.get_panoptic_masks(outputs,samples, targets, method)
         outputs['pred_masks'] = masks
-
-
-
         return outputs
 
 

@@ -299,6 +299,9 @@ class NestedTensor(object):
 
     def decompose(self):
         return self.tensors, self.mask
+    
+    def decompose_single_item(self, i):
+        return self.tensors[i].unsqueeze(0),self.mask[i].unsqueeze(0)
 
     def __repr__(self):
         return str(self.tensors)

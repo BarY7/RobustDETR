@@ -14,7 +14,7 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
 
 from .backbone import build_backbone
 from .matcher import build_matcher
-from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
+from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegmRelMaps,
                            dice_loss, sigmoid_focal_loss)
 from .transformer import build_transformer
 
@@ -178,12 +178,13 @@ class SetCriterion(nn.Module):
         target_masks = target_masks[tgt_idx]
 
         # upsample predictions to the target size
-        src_masks = interpolate(src_masks[:, None], size=target_masks.shape[-2:],
+        src_masks = interpolate(src_masks.unsqueeze(1), size=target_masks.shape[-2:],
                                 mode="bilinear", align_corners=False)
         src_masks = src_masks[:, 0].flatten(1)
 
         target_masks = target_masks.flatten(1)
-        target_masks = target_masks.view(src_masks.shape)
+        target_masks = target_masks.view(src_masks.shape) #doesn't do anything imo
+
         losses = {
             "loss_mask": sigmoid_focal_loss(src_masks, target_masks, num_boxes),
             "loss_dice": dice_loss(src_masks, target_masks, num_boxes),
@@ -191,22 +192,49 @@ class SetCriterion(nn.Module):
         return losses
 
     def compute_fg_loss(self, relevance_map, target_seg):
-        pointwise_matrices = torch.mul(relevance_map, target_seg)
-        fg_mse = F.mse_loss(pointwise_matrices, torch.ones_like(pointwise_matrices))
+        pointwise_matrices = torch.mul(relevance_map, target_seg.float())
+        fg_mse = F.mse_loss(pointwise_matrices.float(), torch.ones_like(pointwise_matrices))
         return fg_mse
+
     def compute_bg_loss(self, relevance_map, target_seg):
-        neg_target_seg = torch.ones_like(target_seg) - target_seg # this should neg the seg matrix
+        neg_target_seg = torch.abs((torch.ones_like(target_seg.float()) - target_seg.float())) # this should neg the seg matrix
         pointwise_matrices = torch.mul(relevance_map, neg_target_seg)
-        bg_mse = F.mse_loss(pointwise_matrices, torch.ones_like(pointwise_matrices))
+        bg_mse = F.mse_loss(pointwise_matrices, torch.zeros_like(pointwise_matrices))
         return bg_mse
+
     def compute_relevance_loss(self,outputs, targets):
         lamda_fg = 0.25
         lamga_bg = 0.75
+        outputs = outputs.cuda()
         fg_loss = self.compute_fg_loss(outputs,targets)
         bg_loss = self.compute_bg_loss(outputs, targets)
         relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
         return relevance_loss
+
     def loss_rel_maps(self, outputs, targets, indices, num_boxes):
+
+        assert 'pred_masks' in outputs
+
+        postprocessors = {'bbox': PostProcessRelMaps()}
+        postprocessors['segm'] = PostProcessSegmRelMaps()
+
+        # reshape masks from output
+        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        output_mask_results = postprocessors['bbox'](outputs, orig_target_sizes)
+        target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+        output_mask_results = postprocessors['segm'](output_mask_results, outputs, orig_target_sizes, target_sizes)
+
+        # get correct index matching
+        idx = self._get_src_permutation_idx(indices)
+        tgt_idx = self._get_tgt_permutation_idx(indices)
+
+        # get the reshaped pred masks and original mask
+
+        pred_masks = [output_mask_results[batch_index]['re_pred_masks'][m_id] for (batch_index, m_id) in zip(idx[0],idx[1])]
+        target_masks = [targets[batch_index]['masks'][i] for (batch_index, i) in zip(tgt_idx[0], tgt_idx[1])]
+        loss_list = [self.compute_relevance_loss(pred_mask, target_mask) for pred_mask,target_mask in zip(pred_masks, target_masks)]
+
+
         print(5)
         losses: Dict = {}
 
@@ -255,6 +283,7 @@ class SetCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
+            #indices: list, len 2. 0: indices in outputs, 1: matching indices in targets.
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
@@ -305,6 +334,37 @@ class PostProcess(nn.Module):
         results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
 
         return results
+
+class PostProcessRelMaps(nn.Module):
+    """ This module converts the model's output into the format expected by the coco api"""
+    # @torch.no_grad()
+    def forward(self, outputs, target_sizes):
+        """ Perform the computation
+        Parameters:
+            outputs: raw outputs of the model
+            target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
+                          For evaluation, this must be the original image size (before any data augmentation)
+                          For visualization, this should be the image size after data augment, but before padding
+        """
+        out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
+
+        assert len(out_logits) == len(target_sizes)
+        assert target_sizes.shape[1] == 2
+
+        prob = F.softmax(out_logits, -1)
+        scores, labels = prob[..., :-1].max(-1)
+
+        # convert to [x0, y0, x1, y1] format
+        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
+        # and from relative [0, 1] to absolute [0, height] coordinates
+        img_h, img_w = target_sizes.unbind(1)
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+        boxes = boxes * scale_fct[:, None, :]
+
+        results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+
+        return results
+
 
 
 class MLP(nn.Module):
@@ -374,7 +434,7 @@ def build(args):
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
-        postprocessors['segm'] = PostProcessSegm()
+        postprocessors['segm'] = PostProcessSegmRelMaps()
         if args.dataset_file == "coco_panoptic":
             is_thing_map = {i: i <= 90 for i in range(201)}
             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)

@@ -216,6 +216,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
 
 
 class PostProcessSegm(nn.Module):
+    # Interpolates the mask to real image space
     def __init__(self, threshold=0.5):
         super().__init__()
         self.threshold = threshold
@@ -234,6 +235,38 @@ class PostProcessSegm(nn.Module):
             results[i]["masks"] = F.interpolate(
                 results[i]["masks"].float(), size=tuple(tt.tolist()), mode="nearest"
             ).byte()
+
+        return results
+
+
+class PostProcessSegmRelMaps(nn.Module):
+    # Interpolates the mask to real image space
+    def __init__(self, threshold=0.5):
+        super().__init__()
+        self.threshold = threshold
+
+    # @torch.no_grad()
+    def forward(self, results, outputs, orig_target_sizes, max_target_sizes):
+        # important - copmutations RN are used with an interpolated mask to size (max_h, max_w)
+        assert len(orig_target_sizes) == len(max_target_sizes)
+        max_h, max_w = max_target_sizes.max(0)[0].tolist()
+        outputs_masks = outputs["pred_masks"].squeeze(2)
+        # x = F.interpolate(outputs_masks[0].unsqueeze(0), size=(max_h, max_w), mode="bilinear", align_corners=False)
+        # outputs_masks = (outputs_masks.sigmoid() > self.threshold).cpu()
+        for i in range(len(outputs_masks)):
+            results[i]["re_pred_masks"] = outputs_masks[i]
+            t_x, t_y = max_target_sizes[i]
+            tmp = F.interpolate(outputs_masks[i].unsqueeze(0), size=(t_x, t_y), mode="bilinear", align_corners=False)
+            tmp = tmp.sigmoid() #do we need this?
+            results[i]["re_pred_masks"] = tmp.squeeze(0)
+        # this part resizes the mask to the original image size
+
+        # for i, (cur_mask, t, tt) in enumerate(zip(outputs_masks, max_target_sizes, orig_target_sizes)):
+        #     img_h, img_w = t[0], t[1]
+        #     results[i]["re_pred_masks"] = cur_mask[:, :img_h, :img_w].unsqueeze(1)
+        #     results[i]["re_pred_masks"] = F.interpolate(
+        #         results[i]["re_pred_masks"].float(), size=tuple(tt.tolist()), mode="nearest"
+        #     ).byte()
 
         return results
 
