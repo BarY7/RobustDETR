@@ -218,11 +218,22 @@ class SetCriterion(nn.Module):
         postprocessors = {'bbox': PostProcessRelMaps()}
         postprocessors['segm'] = PostProcessSegmRelMaps()
 
-        # reshape masks from output
-        orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-        output_mask_results = postprocessors['bbox'](outputs, orig_target_sizes)
-        target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-        output_mask_results = postprocessors['segm'](output_mask_results, outputs, orig_target_sizes, target_sizes)
+        masks = [t["masks"] for t in targets]
+        # TODO use valid to mask invalid areas due to padding in loss
+        # this resizes all mask to (max_h, max_w) size
+        target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
+        # target_masks = target_masks.to(src_masks)
+
+        src_masks = outputs["pred_masks"]
+        # upsample predictions to the target size
+        src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
+                                mode="bilinear", align_corners=False)
+
+        # # reshape masks from output
+        # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+        # output_mask_results = postprocessors['bbox'](outputs, orig_target_sizes)
+        # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+        # output_mask_results = postprocessors['segm'](output_mask_results, outputs, orig_target_sizes, target_sizes)
 
         # get correct index matching
         idx = self._get_src_permutation_idx(indices)
@@ -230,13 +241,14 @@ class SetCriterion(nn.Module):
 
         # get the reshaped pred masks and original mask
 
-        pred_masks = [output_mask_results[batch_index]['re_pred_masks'][m_id] for (batch_index, m_id) in zip(idx[0],idx[1])]
-        target_masks = [targets[batch_index]['masks'][i] for (batch_index, i) in zip(tgt_idx[0], tgt_idx[1])]
-        loss_list = [self.compute_relevance_loss(pred_mask, target_mask) for pred_mask,target_mask in zip(pred_masks, target_masks)]
+        pred_masks = src_masks[idx]
+        target_masks = target_masks[tgt_idx]
+        loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask,target_mask in zip(pred_masks, target_masks)]).sum() / num_boxes
+        losses: Dict = {
+            "rel_maps_err": loss
+        }
 
-
-        print(5)
-        losses: Dict = {}
+        return losses
 
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
@@ -293,6 +305,8 @@ class SetCriterion(nn.Module):
                 for loss in self.losses:
                     if loss == 'masks':
                         # Intermediate masks losses are too costly to compute, we ignore them.
+                        continue
+                    if loss == 'rel_maps':
                         continue
                     kwargs = {}
                     if loss == 'labels':

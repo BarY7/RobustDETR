@@ -55,12 +55,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
         h, w = mask_generator.get_feature_map_size(outputs, samples)
 
-        x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
+        # x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
         # masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(get_one_output_from_batch(outputs, i), utils.NestedTensor(*samples.decompose_single_item(i)), targets[i], method) for i in range(batch_size)])
         new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
                                                                                   torch.tensor([mask_idx])) for mask_idx
                                 in range((masks_amount))]) for i in range(batch_size)]
-        new_masks = [torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))]
+        new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
         outputs["pred_masks"] = new_masks
         feature_map_relevancy = outputs
 
@@ -100,6 +100,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+        torch.cuda.memory_summary(device=None, abbreviated=False)
+        torch.cuda.empty_cache()
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
