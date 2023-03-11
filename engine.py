@@ -19,16 +19,6 @@ from torch import nn
 import matplotlib.pyplot as plt
 
 
-def get_one_output_from_batch(dict, i):
-    new_dict: Dict = {}
-    for key in dict:
-        if (torch.is_tensor(dict[key])):
-            new_dict[key] = dict[key][i].unsqueeze(0)
-        else:
-            new_dict[key] = dict[key]
-    return new_dict
-
-
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors: Dict[str, nn.Module],
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
@@ -50,18 +40,26 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
         batch_size = len(samples.tensors)
 
-        outputs = model(samples)
+        # outputs = model(samples)
+
+        # update in mask generator so rel maps loss can access this
+        outputs = mask_generator.forward_and_update_feature_map_size(samples)
+
+        # SET_FEATURE_MAP_SIZE = True
+
         masks_amount = outputs['pred_logits'].shape[1]
 
-        h, w = mask_generator.get_feature_map_size(outputs, samples)
+        # h, w = mask_generator.update_feature_map_size(outputs, samples)
 
         # x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
         # masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(get_one_output_from_batch(outputs, i), utils.NestedTensor(*samples.decompose_single_item(i)), targets[i], method) for i in range(batch_size)])
-        new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
-                                                                                  torch.tensor([mask_idx])) for mask_idx
-                                in range((masks_amount))]) for i in range(batch_size)]
-        new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
-        outputs["pred_masks"] = new_masks
+
+        # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
+        #                                                                           torch.tensor([mask_idx])) for mask_idx
+        #                         in range((masks_amount))]) for i in range(batch_size)]
+        # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
+
+        # outputs["pred_masks"] = new_masks
         feature_map_relevancy = outputs
 
         # # reshape masks
@@ -72,7 +70,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
-        loss_dict = criterion(outputs, targets)
+        loss_dict = criterion(outputs, targets, mask_generator)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 

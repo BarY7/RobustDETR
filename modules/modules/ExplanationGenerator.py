@@ -194,6 +194,63 @@ class Generator:
         aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
         return aggregated
 
+
+    #NOTICE: IF WE HAVE outputs.size[0] > 1 THIS BREAKS!
+    def generate_ours_from_outputs(self, outputs, target_index, index=None, use_lrp=True, normalize_self_attention=True, apply_self_in_rule_10=True):
+        self.use_lrp = use_lrp
+        self.normalize_self_attention = normalize_self_attention
+        self.apply_self_in_rule_10 = apply_self_in_rule_10
+
+        outputs = outputs['pred_logits']
+        kwargs = {"alpha": 1,
+                  "target_index": target_index}
+
+        if index == None:
+            index = outputs[0, target_index, :-1].max(1)[1]
+
+        kwargs["target_class"] = index
+
+        one_hot = torch.zeros_like(outputs).to(outputs.device)
+        one_hot[0, target_index, index] = 1
+        one_hot_vector = one_hot
+        one_hot.requires_grad_(True)
+        one_hot = torch.sum(one_hot.cuda() * outputs)
+
+        self.model.zero_grad()
+        one_hot.backward(retain_graph=True)
+
+        if use_lrp:
+            self.model.relprop(one_hot_vector, **kwargs)
+
+        decoder_blocks = self.model.transformer.decoder.layers
+        encoder_blocks = self.model.transformer.encoder.layers
+
+        # initialize relevancy matrices
+        image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
+        queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
+
+        # image self attention matrix
+        self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+        # queries self attention matrix
+        self.R_q_q = torch.eye(queries_num, queries_num).to(encoder_blocks[0].self_attn.get_attn().device)
+        # impact of image boxes on queries
+        self.R_q_i = torch.zeros(queries_num, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+
+        # image self attention in the encoder
+        self.handle_self_attention_image(encoder_blocks)
+
+        # decoder self attention of queries followd by multi-modal attention
+        for blk in decoder_blocks:
+            # decoder self attention
+            self.handle_co_attn_self_query(blk)
+
+            # encoder decoder attention
+            self.handle_co_attn_query(blk)
+        aggregated = self.R_q_i.unsqueeze_(0)
+
+        aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
+        return aggregated
+
     def generate_partial_lrp(self, img, target_index, index=None):
         outputs = self.model(img)
         kwargs = {"alpha": 1,

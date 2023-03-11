@@ -41,26 +41,28 @@ class MaskGenerator:
         self.gen = Generator(model)
         self.abl = GeneratorAlbationNoAgg(model)
         self.model = model
+        self.h = None
+        self.w = None
 
-    def get_feature_map_size(self, outputs, samples):
+    def forward_and_update_feature_map_size(self,  samples):
         # keep only predictions with 0.8+ confidence
-        probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
-        keep = probas.max(-1).values > 0.5
+        # probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
+        # keep = probas.max(-1).values > 0.5
 
-        ########### for visualizations
-        boxes = outputs['pred_boxes'].cpu()
-        im = samples.tensors[0].permute(1, 2, 0).data.cpu().numpy()
-        im = (im - im.min()) / (im.max() - im.min())
-        im = np.uint8(im * 255)
-        im = Image.fromarray(im)
-        # im = T.ToPILImage()(samples.tensors[0])
-        # convert boxes from [0; 1] to image scales
-        bboxes_scaled = rescale_bboxes(boxes[0, keep.cpu()], im.size)
-        ############ for visualizations
+        # ########### for visualizations
+        # boxes = outputs['pred_boxes'].cpu()
+        # im = samples.tensors[0].permute(1, 2, 0).data.cpu().numpy()
+        # im = (im - im.min()) / (im.max() - im.min())
+        # im = np.uint8(im * 255)
+        # im = Image.fromarray(im)
+        # # im = T.ToPILImage()(samples.tensors[0])
+        # # convert boxes from [0; 1] to image scales
+        # bboxes_scaled = rescale_bboxes(boxes[0, keep.cpu()], im.size)
+        # ############ for visualizations
 
 
-        if keep.nonzero().shape[0] <= 1:
-            print("no segmentation")
+        # if keep.nonzero().shape[0] <= 1:
+        #     print("no segmentation")
 
         # use lists to store the outputs via up-values
         vis_shape, target_shape = [], []
@@ -74,14 +76,15 @@ class MaskGenerator:
             )
         ]
 
-        self.model(samples)
+        outputs = self.model(samples)
 
         for hook in hooks:
             hook.remove()
 
         h, w = vis_shape[0].shape[-2:]
+        self.h, self.w = h, w
 
-        return h,w
+        return outputs
 
     def get_panoptic_masks(self, outputs, samples,targets,method):
                 # propagate through the model
@@ -194,8 +197,8 @@ class MaskGenerator:
 
 
     # Get the explanations
-    def get_panoptic_masks_no_thresholding(self,samples,idx):
-        cam = self.gen.generate_ours(samples, idx, use_lrp=False)
+    def get_panoptic_masks_no_thresholding(self, outputs_single_item, idx):
+        cam = self.gen.generate_ours_from_outputs(outputs_single_item, idx, use_lrp=False)
         cam = (cam - cam.min()) / (cam.max() - cam.min()) \
               #* 255
         # * 255 was done to get to image range

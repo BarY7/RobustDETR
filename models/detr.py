@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 from typing import Dict
 
-from util import box_ops
+from util import box_ops, model_output_utils
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
@@ -87,6 +87,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
+
     def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
         """ Create the criterion.
         Parameters:
@@ -183,7 +184,7 @@ class SetCriterion(nn.Module):
         src_masks = src_masks[:, 0].flatten(1)
 
         target_masks = target_masks.flatten(1)
-        target_masks = target_masks.view(src_masks.shape) #doesn't do anything imo
+        target_masks = target_masks.view(src_masks.shape)  # doesn't do anything imo
 
         losses = {
             "loss_mask": sigmoid_focal_loss(src_masks, target_masks, num_boxes),
@@ -197,26 +198,45 @@ class SetCriterion(nn.Module):
         return fg_mse
 
     def compute_bg_loss(self, relevance_map, target_seg):
-        neg_target_seg = torch.abs((torch.ones_like(target_seg.float()) - target_seg.float())) # this should neg the seg matrix
+        neg_target_seg = torch.abs(
+            (torch.ones_like(target_seg.float()) - target_seg.float()))  # this should neg the seg matrix
         pointwise_matrices = torch.mul(relevance_map, neg_target_seg)
         bg_mse = F.mse_loss(pointwise_matrices, torch.zeros_like(pointwise_matrices))
         return bg_mse
 
-    def compute_relevance_loss(self,outputs, targets):
+    def compute_relevance_loss(self, outputs, targets):
         lamda_fg = 0.25
         lamga_bg = 0.75
         outputs = outputs.cuda()
-        fg_loss = self.compute_fg_loss(outputs,targets)
+        fg_loss = self.compute_fg_loss(outputs, targets)
         bg_loss = self.compute_bg_loss(outputs, targets)
         relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
         return relevance_loss
 
-    def loss_rel_maps(self, outputs, targets, indices, num_boxes):
 
-        assert 'pred_masks' in outputs
 
-        postprocessors = {'bbox': PostProcessRelMaps()}
-        postprocessors['segm'] = PostProcessSegmRelMaps()
+    def loss_rel_maps(self, outputs, targets, indices, num_boxes, mask_generator=None):
+
+        # assert 'pred_masks' in outputs
+
+        # get correct index matching
+        idx = self._get_src_permutation_idx(indices)
+        tgt_idx = self._get_tgt_permutation_idx(indices)
+
+        # get src masks from outputs, just for the 'true' masks
+        h, w = mask_generator.h, mask_generator.w
+
+        # bugged for no masks
+        src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
+                                                                                 torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
+        print(src_masks.shape)
+        print(h)
+        print(w)
+        src_masks = torch.reshape(src_masks, [src_masks.shape[0], src_masks.shape[1], h, w], )
+        # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(outputs,
+        #                                                                           torch.tensor([mask_idx])) for mask_idx
+        #                         in range((masks_amount))]) for i in range(batch_size)]
+        # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
 
         masks = [t["masks"] for t in targets]
         # TODO use valid to mask invalid areas due to padding in loss
@@ -224,28 +244,26 @@ class SetCriterion(nn.Module):
         target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
         # target_masks = target_masks.to(src_masks)
 
-        src_masks = outputs["pred_masks"]
         # upsample predictions to the target size
         src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
                                 mode="bilinear", align_corners=False)
 
         # # reshape masks from output
+        # postprocessors = {'bbox': PostProcessRelMaps()}
+        # postprocessors['segm'] = PostProcessSegmRelMaps()
         # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         # output_mask_results = postprocessors['bbox'](outputs, orig_target_sizes)
         # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         # output_mask_results = postprocessors['segm'](output_mask_results, outputs, orig_target_sizes, target_sizes)
 
-        # get correct index matching
-        idx = self._get_src_permutation_idx(indices)
-        tgt_idx = self._get_tgt_permutation_idx(indices)
-
         # get the reshaped pred masks and original mask
 
-        pred_masks = src_masks[idx]
-        target_masks = target_masks[tgt_idx]
-        loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask,target_mask in zip(pred_masks, target_masks)]).sum() / num_boxes
+        pred_masks = src_masks.squeeze(1)
+        target_masks = target_masks[tgt_idx].float()
+        loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
+                             zip(pred_masks, target_masks)]).sum() / num_boxes
         losses: Dict = {
-            "rel_maps_err": loss
+            "loss_rel_maps": loss
         }
 
         return losses
@@ -268,12 +286,14 @@ class SetCriterion(nn.Module):
             'cardinality': self.loss_cardinality,
             'boxes': self.loss_boxes,
             'masks': self.loss_masks,
-            'rel_maps' : self.loss_rel_maps
+            'rel_maps': self.loss_rel_maps
         }
+
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
+        # we have mask_generator inside kwargs for appropriate loss
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
-    def forward(self, outputs, targets):
+    def forward(self, outputs, targets, mask_generator):
         """ This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
@@ -295,9 +315,11 @@ class SetCriterion(nn.Module):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            #indices: list, len 2. 0: indices in outputs, 1: matching indices in targets.
-            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
-
+            # indices: list, len 2. 0: indices in outputs, 1: matching indices in targets.
+            if loss == "rel_maps":
+                losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes, mask_generator=mask_generator))
+            else:
+                losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if 'aux_outputs' in outputs:
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
@@ -321,6 +343,7 @@ class SetCriterion(nn.Module):
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
+
     @torch.no_grad()
     def forward(self, outputs, target_sizes):
         """ Perform the computation
@@ -349,8 +372,10 @@ class PostProcess(nn.Module):
 
         return results
 
+
 class PostProcessRelMaps(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
+
     # @torch.no_grad()
     def forward(self, outputs, target_sizes):
         """ Perform the computation
@@ -378,7 +403,6 @@ class PostProcessRelMaps(nn.Module):
         results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
 
         return results
-
 
 
 class MLP(nn.Module):
@@ -431,6 +455,8 @@ def build(args):
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
         weight_dict["loss_dice"] = args.dice_loss_coef
+    if args.rel_maps:
+        weight_dict["loss_rel_maps"] = args.relmap_loss_coef
     # TODO this is a hack
     if args.aux_loss:
         aux_weight_dict = {}
@@ -442,7 +468,7 @@ def build(args):
     if args.masks:
         losses += ["masks"]
     if args.rel_maps:
-        losses += ["rel_maps"]
+        losses = ["labels", "rel_maps"]
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
     criterion.to(device)
