@@ -468,7 +468,7 @@ def build(args):
     if args.masks:
         losses += ["masks"]
     if args.rel_maps:
-        losses = ["labels", "rel_maps"]
+        losses = ["labels", "rel_maps"] #notice it replaces ,not plus
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
     criterion.to(device)

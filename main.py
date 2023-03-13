@@ -79,7 +79,7 @@ def get_args_parser():
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--relmap_loss_coef', default=2, type=float)
+    parser.add_argument('--relmap_loss_coef', default=3, type=float)
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
 
@@ -180,7 +180,8 @@ def main(args):
                 args.resume, map_location='cpu', check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
-        # Not sure why but the model doesn't contain some layer from original DETR. (Taken from Hila's MM)
+        # Not sure why but the model doesn't contain some layer from original DETR.
+        # This is why we do strict=False. (Taken from Hila's MM)
         model_without_ddp.load_state_dict(checkpoint['model'],  strict=False)
         if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])

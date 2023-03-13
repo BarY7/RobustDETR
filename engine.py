@@ -47,7 +47,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
         # SET_FEATURE_MAP_SIZE = True
 
-        masks_amount = outputs['pred_logits'].shape[1]
+        # masks_amount = outputs['pred_logits'].shape[1]
 
         # h, w = mask_generator.update_feature_map_size(outputs, samples)
 
@@ -60,7 +60,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
 
         # outputs["pred_masks"] = new_masks
-        feature_map_relevancy = outputs
 
         # # reshape masks
         # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
@@ -100,7 +99,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
         torch.cuda.memory_summary(device=None, abbreviated=False)
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -108,16 +107,20 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
-@torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir):
+# @torch.no_grad()
+def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir, is_rel_maps: bool = False):
     model.eval()
     criterion.eval()
+
+    mask_generator = MaskGenerator(model)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Test:'
 
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
+    if (is_rel_maps):
+        iou_types += 'segm'
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
 
@@ -133,8 +136,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
-        loss_dict = criterion(outputs, targets)
+        outputs = mask_generator.forward_and_update_feature_map_size(samples)
+        loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
         weight_dict = criterion.weight_dict
 
         # reduce losses over all GPUs for logging purposes
@@ -166,6 +169,9 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                 res_pano[i]["file_name"] = file_name
 
             panoptic_evaluator.update(res_pano)
+
+        # torch.cuda.memory_summary(device=None, abbreviated=False)
+        # torch.cuda.empty_cache()
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
