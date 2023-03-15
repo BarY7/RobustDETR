@@ -34,7 +34,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     method: str = 'ours_no_lrp'
     print("using method {0} for visualization".format(method))
 
+    # temp_count_4480 = 0
+    # iterator = iter(data_loader)
+    # consume(iterator, 4480)
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
+        # temp_count_4480 += samples.tensors.shape[0]
+        # if(temp_count_4480 < 4480):
+        #     continue
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 

@@ -226,42 +226,46 @@ class SetCriterion(nn.Module):
         # get src masks from outputs, just for the 'true' masks
         h, w = mask_generator.h, mask_generator.w
 
-        # bugged for no masks
-        src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
-                                                                                 torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
-        print(src_masks.shape)
-        print(h)
-        print(w)
-        src_masks = torch.reshape(src_masks, [src_masks.shape[0], src_masks.shape[1], h, w], )
-        # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(outputs,
-        #                                                                           torch.tensor([mask_idx])) for mask_idx
-        #                         in range((masks_amount))]) for i in range(batch_size)]
-        # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
+        if(idx[0].shape[0] == 0):
+            loss =  torch.tensor(0)
 
-        masks = [t["masks"] for t in targets]
-        # TODO use valid to mask invalid areas due to padding in loss
-        # this resizes all mask to (max_h, max_w) size
-        target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
-        # target_masks = target_masks.to(src_masks)
+        else:
+            # bugged for no masks
+            src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
+                                                                                     torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
+            print(src_masks.shape)
+            print(h)
+            print(w)
+            src_masks = torch.reshape(src_masks, [src_masks.shape[0], src_masks.shape[1], h, w], )
+            # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(outputs,
+            #                                                                           torch.tensor([mask_idx])) for mask_idx
+            #                         in range((masks_amount))]) for i in range(batch_size)]
+            # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
 
-        # upsample predictions to the target size
-        src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
-                                mode="bilinear", align_corners=False)
+            masks = [t["masks"] for t in targets]
+            # TODO use valid to mask invalid areas due to padding in loss
+            # this resizes all mask to (max_h, max_w) size
+            target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
+            # target_masks = target_masks.to(src_masks)
 
-        # # reshape masks from output
-        # postprocessors = {'bbox': PostProcessRelMaps()}
-        # postprocessors['segm'] = PostProcessSegmRelMaps()
-        # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-        # output_mask_results = postprocessors['bbox'](outputs, orig_target_sizes)
-        # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-        # output_mask_results = postprocessors['segm'](output_mask_results, outputs, orig_target_sizes, target_sizes)
+            # upsample predictions to the target size
+            src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
+                                    mode="bilinear", align_corners=False)
 
-        # get the reshaped pred masks and original mask
+            # # reshape masks from output
+            # postprocessors = {'bbox': PostProcessRelMaps()}
+            # postprocessors['segm'] = PostProcessSegmRelMaps()
+            # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+            # output_mask_results = postprocessors['bbox'](outputs, orig_target_sizes)
+            # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+            # output_mask_results = postprocessors['segm'](output_mask_results, outputs, orig_target_sizes, target_sizes)
 
-        pred_masks = src_masks.squeeze(1)
-        target_masks = target_masks[tgt_idx].float()
-        loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
-                             zip(pred_masks, target_masks)]).sum() / num_boxes
+            # get the reshaped pred masks and original mask
+
+            pred_masks = src_masks.squeeze(1)
+            target_masks = target_masks[tgt_idx].float()
+            loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
+                                 zip(pred_masks, target_masks)]).sum() / num_boxes
         losses: Dict = {
             "loss_rel_maps": loss
         }
