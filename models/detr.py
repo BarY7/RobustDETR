@@ -231,6 +231,7 @@ class SetCriterion(nn.Module):
 
         else:
             # bugged for no masks
+            # this needs to require grad
             src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
                                                                                      torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
             print(src_masks.shape)

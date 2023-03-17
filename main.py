@@ -81,7 +81,11 @@ def get_args_parser():
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--relmap_loss_coef', default=3, type=float)
+    parser.add_argument('--relmap_loss_coef', default=30, type=float)
+    parser.add_argument('--lambda_background', default=2, type=float,
+                        help='coefficient of loss for segmentation background.')
+    parser.add_argument('--lambda_foreground', default=0.3, type=float,
+                        help='coefficient of loss for segmentation foreground.')
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
 
@@ -91,7 +95,7 @@ def get_args_parser():
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default='./output',
                         help='path where to save, empty for no saving')
     parser.add_argument('--device', default='cuda',
                         help='device to use for training / testing')

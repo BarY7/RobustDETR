@@ -109,20 +109,20 @@ class Generator:
 
     def handle_self_attention_image(self, blocks):
         for blk in blocks:
-            grad = blk.self_attn.get_attn_gradients().detach()
+            grad = blk.self_attn.get_attn_gradients()
             if self.use_lrp:
-                cam = blk.self_attn.get_attn_cam().detach()
+                cam = blk.self_attn.get_attn_cam()
             else:
-                cam = blk.self_attn.get_attn().detach()
+                cam = blk.self_attn.get_attn()
             cam = avg_heads(cam, grad)
             self.R_i_i += torch.matmul(cam, self.R_i_i)
 
     def handle_co_attn_self_query(self, block):
-        grad = block.self_attn.get_attn_gradients().detach()
+        grad = block.self_attn.get_attn_gradients()
         if self.use_lrp:
-            cam = block.self_attn.get_attn_cam().detach()
+            cam = block.self_attn.get_attn_cam()
         else:
-            cam = block.self_attn.get_attn().detach()
+            cam = block.self_attn.get_attn()
         cam = avg_heads(cam, grad)
         R_q_q_add, R_q_i_add = apply_self_attention_rules(self.R_q_q, self.R_q_i, cam)
         self.R_q_q += R_q_q_add
@@ -130,10 +130,10 @@ class Generator:
 
     def handle_co_attn_query(self, block):
         if self.use_lrp:
-            cam_q_i = block.multihead_attn.get_attn_cam().detach()
+            cam_q_i = block.multihead_attn.get_attn_cam()
         else:
-            cam_q_i = block.multihead_attn.get_attn().detach()
-        grad_q_i = block.multihead_attn.get_attn_gradients().detach()
+            cam_q_i = block.multihead_attn.get_attn()
+        grad_q_i = block.multihead_attn.get_attn_gradients()
         cam_q_i = avg_heads(cam_q_i, grad_q_i)
         self.R_q_i += apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
                                                apply_normalization=self.normalize_self_attention,
@@ -248,7 +248,8 @@ class Generator:
             self.handle_co_attn_query(blk)
         aggregated = self.R_q_i.unsqueeze_(0)
 
-        aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
+        aggregated = aggregated[:,target_index, :].unsqueeze_(0)
+        # requires_grad = False
         return aggregated
 
     def generate_partial_lrp(self, img, target_index, index=None):

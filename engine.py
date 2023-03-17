@@ -22,14 +22,13 @@ import matplotlib.pyplot as plt
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors: Dict[str, nn.Module],
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, max_norm: float = 0):
-    mask_generator = MaskGenerator(model)
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 10
+    print_freq = 2
 
     method: str = 'ours_no_lrp'
     print("using method {0} for visualization".format(method))
@@ -38,9 +37,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     # iterator = iter(data_loader)
     # consume(iterator, 4480)
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
-        # temp_count_4480 += samples.tensors.shape[0]
-        # if(temp_count_4480 < 4480):
-        #     continue
+        mask_generator = MaskGenerator(model)
+
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -105,7 +103,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
         torch.cuda.memory_summary(device=None, abbreviated=False)
-        # torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
