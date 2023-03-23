@@ -84,6 +84,9 @@ class MaskGenerator:
         h, w = vis_shape[0].shape[-2:]
         self.h, self.w = h, w
 
+        del vis_shape
+        del target_shape
+
         return outputs
 
     def get_panoptic_masks(self, outputs, samples,targets,method):
@@ -203,6 +206,15 @@ class MaskGenerator:
               #* 255
         # * 255 was done to get to image range
         return cam
+
+    def get_panoptic_masks_no_thresholding_batchified(self, outputs, idx):
+        cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, use_lrp=False)
+        cam = (cam - cam.min()) / (cam.max() - cam.min()) \
+              #* 255
+        # * 255 was done to get to image range
+        return cam
+
+
     def get_panoptic(self, samples, targets, method):
         outputs = self.model(samples)
         masks = self.get_panoptic_masks(outputs,samples, targets, method)

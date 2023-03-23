@@ -194,7 +194,8 @@ class SetCriterion(nn.Module):
 
     def compute_fg_loss(self, relevance_map, target_seg):
         pointwise_matrices = torch.mul(relevance_map, target_seg.float())
-        fg_mse = F.mse_loss(pointwise_matrices.float(), torch.ones_like(pointwise_matrices))
+        fg_mse = F.mse_loss(pointwise_matrices.float(), target_seg.float())
+        # fg_mse_other = [F.mse_loss(pointwise_matrices.float()[i], target_seg.float()[i]) for i in range(pointwise_matrices.shape[0])]
         return fg_mse
 
     def compute_bg_loss(self, relevance_map, target_seg):
@@ -205,8 +206,8 @@ class SetCriterion(nn.Module):
         return bg_mse
 
     def compute_relevance_loss(self, outputs, targets):
-        lamda_fg = 0.25
-        lamga_bg = 0.75
+        lamda_fg = 0.4
+        lamga_bg = 0.6
         outputs = outputs.cuda()
         fg_loss = self.compute_fg_loss(outputs, targets)
         bg_loss = self.compute_bg_loss(outputs, targets)
@@ -227,13 +228,17 @@ class SetCriterion(nn.Module):
         h, w = mask_generator.h, mask_generator.w
 
         if(idx[0].shape[0] == 0):
-            loss =  torch.tensor(0)
+            loss = torch.tensor(0)
 
         else:
             # bugged for no masks
             # this needs to require grad
-            src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
-                                                                                     torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
+            # src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
+            #                                                                          torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
+
+            #TODO index might need changing! need to compute wrt to the target label and not my best label
+            src_masks = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx )
+
             print(src_masks.shape)
             print(h)
             print(w)
@@ -265,8 +270,15 @@ class SetCriterion(nn.Module):
 
             pred_masks = src_masks.squeeze(1)
             target_masks = target_masks[tgt_idx].float()
-            loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
-                                 zip(pred_masks, target_masks)]).sum() / num_boxes
+            # loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
+            #                      zip(pred_masks, target_masks)]).sum() / num_boxes
+
+            loss = self.compute_relevance_loss(pred_masks,target_masks)
+
+
+            # del loss
+            # loss = torch.tensor([0]).float().cuda()
+            # loss.requires_grad_()
         losses: Dict = {
             "loss_rel_maps": loss
         }
@@ -474,6 +486,7 @@ def build(args):
         losses += ["masks"]
     if args.rel_maps:
         losses = ["labels", "rel_maps"] #notice it replaces ,not plus
+        # losses = ["labels", "boxes"]  # notice it replaces ,not plus
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)
     criterion.to(device)

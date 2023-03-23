@@ -697,15 +697,18 @@ class MultiheadAttention(RelProp):
         return self.attn_cam
 
     def save_attn(self, attn):
+        del self.attn
         self.attn = attn
 
     def get_attn(self):
         return self.attn
 
     def save_attn_gradients(self, attn_gradients):
+        del self.attn_gradients
         self.attn_gradients = attn_gradients
 
     def get_attn_gradients(self):
+        # del self.attn_gradients
         return self.attn_gradients
 
     @staticmethod
@@ -756,7 +759,7 @@ class MultiheadAttention(RelProp):
         attn_output_weights = self.dropout(attn_output_weights)
 
         self.save_attn(attn_output_weights)
-        attn_output_weights.register_hook(self.save_attn_gradients)
+        # attn_output_weights.register_hook(self.save_attn_gradients)
 
         # attn_output = torch.bmm(attn_output_weights, v)
         attn_output = self.einsum2([attn_output_weights, v])  # BHxTxD

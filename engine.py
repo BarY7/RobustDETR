@@ -6,6 +6,7 @@ from typing import Dict
 import math
 import os
 import sys
+import gc
 from typing import Iterable
 
 import torch
@@ -36,7 +37,17 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     # temp_count_4480 = 0
     # iterator = iter(data_loader)
     # consume(iterator, 4480)
+
+    # for obj in gc.get_objects():
+    #     try:
+    #         if torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data)):
+    #             print(type(obj), obj.size())
+    #     except:
+    #         pass
+
+
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
+        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
         mask_generator = MaskGenerator(model)
 
         samples = samples.to(device)
@@ -102,8 +113,16 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
-        torch.cuda.memory_summary(device=None, abbreviated=False)
-        torch.cuda.empty_cache()
+        del outputs
+        del samples
+        del targets
+        del losses
+        # del mask_generator.gen.R_i_i
+        # del mask_generator.gen.R_q_i
+        # del mask_generator.gen.R_q_q
+        del mask_generator.gen
+        del mask_generator
+        # torch.cuda.empty_cache()
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -135,6 +154,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
             data_loader.dataset.ann_folder,
             output_dir=os.path.join(output_dir, "panoptic_eval"),
         )
+
+
 
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
