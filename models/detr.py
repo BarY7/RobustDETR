@@ -283,9 +283,9 @@ class SetCriterion(nn.Module):
         losses: Dict = {
             "loss_rel_maps": loss
         }
-
-        del target_masks
-        del pred_masks
+        if target_masks:
+            del target_masks
+            del pred_masks
 
         return losses
 
