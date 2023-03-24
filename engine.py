@@ -29,7 +29,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
-    print_freq = 2
+    print_freq = 10
 
     method: str = 'ours_no_lrp'
     print("using method {0} for visualization".format(method))
@@ -45,9 +45,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     #     except:
     #         pass
 
-
+    count = 0
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
-        # print(torch.cuda.memory_summary(device=None, abbreviated=False))
+        count += 1
+        if count % 50 == 0:
+            print(torch.cuda.memory_summary(device=None, abbreviated=False))
+            torch.cuda.empty_cache()
+
         mask_generator = MaskGenerator(model)
 
         samples = samples.to(device)

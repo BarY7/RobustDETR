@@ -81,7 +81,7 @@ def get_args_parser():
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--relmap_loss_coef', default=30, type=float)
+    parser.add_argument('--relmap_loss_coef', default=60, type=float)
     parser.add_argument('--lambda_background', default=2, type=float,
                         help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,

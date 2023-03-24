@@ -192,25 +192,26 @@ class SetCriterion(nn.Module):
         }
         return losses
 
-    def compute_fg_loss(self, relevance_map, target_seg):
+    def compute_fg_loss(self, relevance_map, target_seg, mse_critertion):
         pointwise_matrices = torch.mul(relevance_map, target_seg.float())
-        fg_mse = F.mse_loss(pointwise_matrices.float(), target_seg.float())
-        # fg_mse_other = [F.mse_loss(pointwise_matrices.float()[i], target_seg.float()[i]) for i in range(pointwise_matrices.shape[0])]
+        fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
+        # fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in range(pointwise_matrices.shape[0])]
         return fg_mse
 
-    def compute_bg_loss(self, relevance_map, target_seg):
+    def compute_bg_loss(self, relevance_map, target_seg, mse_critertion):
         neg_target_seg = torch.abs(
             (torch.ones_like(target_seg.float()) - target_seg.float()))  # this should neg the seg matrix
         pointwise_matrices = torch.mul(relevance_map, neg_target_seg)
-        bg_mse = F.mse_loss(pointwise_matrices, torch.zeros_like(pointwise_matrices))
+        bg_mse = mse_critertion(pointwise_matrices, torch.zeros_like(pointwise_matrices))
         return bg_mse
 
     def compute_relevance_loss(self, outputs, targets):
+        mse_criterion = torch.nn.MSELoss(reduction='mean')
         lamda_fg = 0.4
         lamga_bg = 0.6
         outputs = outputs.cuda()
-        fg_loss = self.compute_fg_loss(outputs, targets)
-        bg_loss = self.compute_bg_loss(outputs, targets)
+        fg_loss = self.compute_fg_loss(outputs, targets, mse_criterion)
+        bg_loss = self.compute_bg_loss(outputs, targets, mse_criterion)
         relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
         return relevance_loss
 
@@ -282,6 +283,9 @@ class SetCriterion(nn.Module):
         losses: Dict = {
             "loss_rel_maps": loss
         }
+
+        del target_masks
+        del pred_masks
 
         return losses
 

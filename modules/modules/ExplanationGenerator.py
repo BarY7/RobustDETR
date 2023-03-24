@@ -143,7 +143,7 @@ class Generator:
         num_heads = block.multihead_attn.num_heads
 
         cam = cam.reshape((batch_size, -1, cam.shape[-2], cam.shape[-1]))
-        grad = grad.reshape((batch_size, -1, cam.shape[-2], cam.shape[-1]))
+        grad = grad.reshape((batch_size, -1, grad.shape[-2], grad.shape[-1]))
         cam = avg_heads(cam, grad)
 
         R_q_q_add, R_q_i_add = apply_self_attention_rules(self.R_q_q, self.R_q_i, cam)
@@ -353,6 +353,8 @@ class Generator:
         # del one_hot
 
         del self.R_i_i
+        del self.R_q_q
+        del self.R_q_i
 
         return aggregated
 
