@@ -283,7 +283,7 @@ class SetCriterion(nn.Module):
         losses: Dict = {
             "loss_rel_maps": loss
         }
-        if target_masks:
+        if torch.is_tensor(target_masks):
             del target_masks
             del pred_masks
 
