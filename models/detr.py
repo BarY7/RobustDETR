@@ -275,7 +275,10 @@ class SetCriterion(nn.Module):
             #                      zip(pred_masks, target_masks)]).sum() / num_boxes
 
             loss = self.compute_relevance_loss(pred_masks,target_masks)
-
+            
+            if torch.is_tensor(target_masks):
+                del target_masks
+                del pred_masks
 
             # del loss
             # loss = torch.tensor([0]).float().cuda()
@@ -283,9 +286,6 @@ class SetCriterion(nn.Module):
         losses: Dict = {
             "loss_rel_maps": loss
         }
-        if torch.is_tensor(target_masks):
-            del target_masks
-            del pred_masks
 
         return losses
 
