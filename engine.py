@@ -9,9 +9,10 @@ import sys
 import gc
 from typing import Iterable
 
+import cv2
 import torch
 from mask_generator import MaskGenerator
-from models.segmentation import PostProcessSegm
+from models.segmentation import PostProcessSegm, PostProcessSegmOne
 
 import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
@@ -19,10 +20,14 @@ from datasets.panoptic_eval import PanopticEvaluator
 from torch import nn
 import matplotlib.pyplot as plt
 
+from modules.modules.explainer import get_image_with_relevance
+from util.model_output_utils import otsu_thresh
+
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors: Dict[str, nn.Module],
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0):
+                    device: torch.device, epoch: int, max_norm: float = 0, output_dir = None):
+    post_process_seg = PostProcessSegmOne()
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -46,9 +51,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     #         pass
 
     count = 0
+    save_interval = 2
+    memory_interval = 5
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
-        if count % 50 == 0:
+        if count % memory_interval == 0:
             print(torch.cuda.memory_summary(device=None, abbreviated=False))
             torch.cuda.empty_cache()
 
@@ -117,6 +124,39 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
+        # debugging output
+        if count % save_interval == 0:
+            if output_dir:
+                # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
+                images = samples.tensors
+                relevance = mask_generator.get_relevance()
+                target_masks_vis = mask_generator.get_targets()
+                mask_count = 0
+                for img_num in range(images.shape[0]): # IMAGES NUM
+                    target_masks = targets[img_num]['masks']
+                    for mask_target_num in range(target_masks.shape[0]): # MASK ID
+                        orig_size = targets[img_num]['orig_size']
+
+                        size_no_pad = targets[img_num]['size']
+                        resized_rel = post_process_seg(relevance[mask_count], size_no_pad, orig_size)
+                        resized_img = post_process_seg.inter_image_bilinear(images[img_num], size_no_pad, orig_size)
+
+
+                        # resized_rel = otsu_thresh(resized_rel, )
+                        image = get_image_with_relevance(resized_img, torch.ones_like(resized_img))
+                        new_vis = get_image_with_relevance(resized_img, resized_rel)
+                        # old_vis = get_image_with_relevance(resized_img, orig_relevance[img_num])
+                        gt = get_image_with_relevance(resized_img,
+                                                      post_process_seg(target_masks_vis[mask_count].unsqueeze(0), size_no_pad, orig_size,
+                                                                       thresh=False)
+                                                      )
+                        h_img = cv2.hconcat([image, gt, new_vis])
+                        did_save = cv2.imwrite(f'{output_dir}/train_samples/res_{count}_{img_num}_{mask_target_num}.jpg', h_img)
+
+                        mask_count += 1
+
+
+
         del outputs
         del samples
         del targets
@@ -134,12 +174,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
-# @torch.no_grad()
+@torch.no_grad()
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir, is_rel_maps: bool = False):
     model.eval()
     criterion.eval()
-
-    mask_generator = MaskGenerator(model)
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
@@ -159,14 +197,14 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
             output_dir=os.path.join(output_dir, "panoptic_eval"),
         )
 
-
-
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
+        mask_generator = MaskGenerator(model)
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = mask_generator.forward_and_update_feature_map_size(samples)
-        loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
+        with torch.enable_grad():
+            outputs = mask_generator.forward_and_update_feature_map_size(samples)
+            loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
         weight_dict = criterion.weight_dict
 
         # reduce losses over all GPUs for logging purposes

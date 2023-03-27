@@ -3,6 +3,9 @@ from modules.modules.ExplanationGenerator import Generator, GeneratorAlbationNoA
 import numpy as np
 from PIL import Image
 
+from util.model_output_utils import normalize_rel_maps
+
+
 def box_cxcywh_to_xyxy(x):
     x_c, y_c, w, h = x.unbind(1)
     b = [(x_c - 0.5 * w), (y_c - 0.5 * h),
@@ -43,6 +46,10 @@ class MaskGenerator:
         self.model = model
         self.h = None
         self.w = None
+
+        # for debugging purpose, only value
+        self.relevance = None
+        self.target_masks = None
 
     def forward_and_update_feature_map_size(self,  samples):
         # keep only predictions with 0.8+ confidence
@@ -209,10 +216,27 @@ class MaskGenerator:
 
     def get_panoptic_masks_no_thresholding_batchified(self, outputs, idx):
         cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, use_lrp=False)
-        cam = (cam - cam.min()) / (cam.max() - cam.min()) \
+        # normalize !each mask! by its min and max
+
+        cam = normalize_rel_maps(cam)
+        cam = cam.unsqueeze(1).unsqueeze(1)
+        # cam = (cam - cam.min()) / (cam.max() - cam.min()) \
               #* 255
         # * 255 was done to get to image range
+
         return cam
+
+    def set_relevance(self,relevance):
+        self.relevance = relevance.detach()
+
+    def get_relevance(self):
+        return self.relevance
+
+    def set_targets(self, target_masks):
+        self.target_masks = target_masks
+
+    def get_targets(self):
+        return self.target_masks
 
 
     def get_panoptic(self, samples, targets, method):

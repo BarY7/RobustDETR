@@ -299,7 +299,7 @@ class Generator:
 
         # kwargs = {"alpha": 1,
         #           "target_index": target_index}
-
+        # TODO verify index
         if index == None:
             index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
 

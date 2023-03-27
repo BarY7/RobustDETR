@@ -11,11 +11,12 @@ from util import box_ops, model_output_utils
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
+from util.model_output_utils import normalize_rel_maps
 
 from .backbone import build_backbone
 from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegmRelMaps,
-                           dice_loss, sigmoid_focal_loss)
+                           dice_loss, sigmoid_focal_loss, PostProcessSegm)
 from .transformer import build_transformer
 
 
@@ -208,7 +209,7 @@ class SetCriterion(nn.Module):
     def compute_relevance_loss(self, outputs, targets):
         mse_criterion = torch.nn.MSELoss(reduction='mean')
         lamda_fg = 0.4
-        lamga_bg = 0.6
+        lamga_bg = 2
         outputs = outputs.cuda()
         fg_loss = self.compute_fg_loss(outputs, targets, mse_criterion)
         bg_loss = self.compute_bg_loss(outputs, targets, mse_criterion)
@@ -258,6 +259,9 @@ class SetCriterion(nn.Module):
             # upsample predictions to the target size
             src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
                                     mode="bilinear", align_corners=False)
+            src_masks = normalize_rel_maps(src_masks)
+
+            mask_generator.set_relevance(src_masks)
 
             # # reshape masks from output
             # postprocessors = {'bbox': PostProcessRelMaps()}
@@ -274,6 +278,7 @@ class SetCriterion(nn.Module):
             # loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
             #                      zip(pred_masks, target_masks)]).sum() / num_boxes
 
+            mask_generator.set_targets(target_masks)
             loss = self.compute_relevance_loss(pred_masks,target_masks)
 
 
@@ -496,7 +501,7 @@ def build(args):
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
-        postprocessors['segm'] = PostProcessSegmRelMaps()
+        postprocessors['segm'] = PostProcessSegm()
         if args.dataset_file == "coco_panoptic":
             is_thing_map = {i: i <= 90 for i in range(201)}
             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
