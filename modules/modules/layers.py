@@ -759,7 +759,7 @@ class MultiheadAttention(RelProp):
         attn_output_weights = self.dropout(attn_output_weights)
 
         self.save_attn(attn_output_weights)
-        # attn_output_weights.register_hook(self.save_attn_gradients)
+        attn_output_weights.register_hook(self.save_attn_gradients)
 
         # attn_output = torch.bmm(attn_output_weights, v)
         attn_output = self.einsum2([attn_output_weights, v])  # BHxTxD

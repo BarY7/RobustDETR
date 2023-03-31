@@ -2,18 +2,77 @@ import torch
 from modules.modules.ExplanationGenerator import Generator, GeneratorAlbationNoAgg
 import numpy as np
 from PIL import Image
+import matplotlib.pyplot as plt
 
+from util.model_output_utils import normalize_rel_maps
+
+
+
+def plot_results_og(pil_img, prob, boxes):
+    # plt.figure(figsize=(16,10))
+    # pil_img = (pil_img - pil_img.min()) / (pil_img.max() - pil_img.min())
+    plt.imshow(pil_img)
+    ax = plt.gca()
+    colors = COLORS * 100
+    for p, (xmin, ymin, xmax, ymax), c in zip(prob, boxes.tolist(), colors):
+        ax.add_patch(plt.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+                                   fill=False, color=c, linewidth=3))
+        cl = p.argmax()
+        text = f'{CLASSES[cl]}: {p[cl]:0.2f}'
+        ax.text(xmin, ymin, text, fontsize=15,
+                bbox=dict(facecolor='yellow', alpha=0.5))
+    plt.axis('off')
+    plt.show()
 def box_cxcywh_to_xyxy(x):
-    x_c, y_c, w, h = x.unbind(1)
+    x_c, y_c, w, h = x
     b = [(x_c - 0.5 * w), (y_c - 0.5 * h),
          (x_c + 0.5 * w), (y_c + 0.5 * h)]
-    return torch.stack(b, dim=1)
+    return torch.tensor(b)
 
 def rescale_bboxes(out_bbox, size):
-    img_w, img_h = size
+    img_h, img_w = size
     b = box_cxcywh_to_xyxy(out_bbox)
     b = b * torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32)
     return b
+
+def plot_results(fig,pil_img, p, box, idx, title=''):
+    ax1 = fig.add_subplot(2, 2, idx)
+    ax1.title.set_text(title)
+    plt.imshow(pil_img.astype(np.uint32))
+    ax = plt.gca()
+    colors = COLORS * 100
+
+    (xmin, ymin, xmax, ymax) = box.numpy().astype(np.uint32)
+
+
+    if (xmin < 0 or ymin < 0):
+        print("OVERFLOW")
+    if (xmax > pil_img.shape[1] or ymax > pil_img.shape[0]):
+        print("OVERFLOW")
+
+    ax.add_patch(plt.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+                               fill=False, color=[0.494, 0.684, 0.556], linewidth=1,))
+
+    # ax.add_patch(plt.Rectangle((xmin, ymin), xmax, ymax, fill=False, color=[0.994, 0.184, 0.556], linewidth=3, ))
+    if title != "GT":
+        cl = p[:-1].argmax()
+        pres = p[cl]
+        ind = cl
+    else:
+        cl = p
+        pres = 10
+        ind = int(cl.item())
+
+    text = f'{CLASSES[ind]}: {pres:0.2f}'
+
+
+    ax.text(xmin, ymin, text, fontsize=8,
+            # bbox=dict(facecolor='yellow', alpha=0.3)
+            )
+
+    plt.axis('off')
+    # plt.show()
+
 
 CLASSES = [
     'N/A', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
@@ -39,10 +98,17 @@ COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
 class MaskGenerator:
     def __init__(self, model):
         self.gen = Generator(model)
-        self.abl = GeneratorAlbationNoAgg(model)
+        # self.abl = GeneratorAlbationNoAgg(model)
         self.model = model
         self.h = None
         self.w = None
+
+        # for debugging purpose, only value
+        self.relevance = None
+        self.target_masks = None
+        self.pred_boxes = None # vis
+        self.probs = None #vis
+        self.tar_labels = None
 
     def forward_and_update_feature_map_size(self,  samples):
         # keep only predictions with 0.8+ confidence
@@ -209,10 +275,52 @@ class MaskGenerator:
 
     def get_panoptic_masks_no_thresholding_batchified(self, outputs, idx):
         cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, use_lrp=False)
-        cam = (cam - cam.min()) / (cam.max() - cam.min()) \
+        # normalize !each mask! by its min and max
+
+        cam = normalize_rel_maps(cam)
+        cam = cam.unsqueeze(1).unsqueeze(1)
+        # cam = (cam - cam.min()) / (cam.max() - cam.min()) \
               #* 255
         # * 255 was done to get to image range
+
         return cam
+
+    def set_relevance(self,relevance):
+        self.relevance = relevance.detach()
+
+    def get_relevance(self):
+        return self.relevance
+
+    def set_labels(self,labels):
+        self.tar_labels = labels.detach()
+
+    def get_labels(self):
+        return self.tar_labels
+
+
+    def set_boxes(self, pred_boxes):
+        self.pred_boxes = pred_boxes.detach().cpu()
+
+    def get_boxes(self):
+        return self.pred_boxes
+
+    def set_tar_boxes(self, boxes):
+        self.tar_boxes = boxes.detach().cpu()
+
+    def get_tar_boxes(self):
+        return self.tar_boxes
+
+    def set_targets(self, target_masks):
+        self.target_masks = target_masks
+
+    def get_targets(self):
+        return self.target_masks
+
+    def set_probs(self, probs):
+        self.probs = probs
+
+    def get_probs(self):
+        return self.probs
 
 
     def get_panoptic(self, samples, targets, method):

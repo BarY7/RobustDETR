@@ -9,9 +9,14 @@ import sys
 import gc
 from typing import Iterable
 
+import cv2
+import numpy as np
+import requests
 import torch
-from mask_generator import MaskGenerator
-from models.segmentation import PostProcessSegm
+from mask_generator import MaskGenerator\
+    # , rescale_bboxes, plot_results, plot_results_og
+from models.segmentation import PostProcessSegm, PostProcessSegmOne
+from PIL import Image
 
 import util.misc as utils
 from datasets.coco_eval import CocoEvaluator
@@ -19,10 +24,17 @@ from datasets.panoptic_eval import PanopticEvaluator
 from torch import nn
 import matplotlib.pyplot as plt
 
+from modules.modules.explainer import get_image_with_relevance, show_cam_on_image
+from util.model_output_utils import otsu_thresh
+
+
+# def plot_result(img, prob, box):
+
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors: Dict[str, nn.Module],
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0):
+                    device: torch.device, epoch: int, max_norm: float = 0, output_dir = None):
+    post_process_seg = PostProcessSegmOne()
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -46,9 +58,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     #         pass
 
     count = 0
+    save_interval = 1
+    memory_interval = 5
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
-        if count % 50 == 0:
+        if count % memory_interval == 0:
             print(torch.cuda.memory_summary(device=None, abbreviated=False))
             torch.cuda.empty_cache()
 
@@ -88,6 +102,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
+        optimizer.zero_grad()
+
         loss_dict = criterion(outputs, targets, mask_generator)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
@@ -108,14 +124,92 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             sys.exit(1)
 
         optimizer.zero_grad()
-        losses.backward()
-        if max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
+        # losses.backward()
+        # if max_norm > 0:
+        #     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+        # optimizer.step()
 
         metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+        # # debugging output
+        # if count % save_interval == 0:
+        #     if output_dir:
+        #         # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
+        #         images = samples.tensors
+        #         relevance = mask_generator.get_relevance()
+        #         target_masks_vis = mask_generator.get_targets()
+        #         pred_probs_vis = mask_generator.get_probs()
+        #         target_boxes = mask_generator.get_tar_boxes()
+        #         target_labels = mask_generator.get_labels()
+        #
+        #         mask_count = 0
+        #         for img_num in range(images.shape[0]): # IMAGES NUM
+        #             # target_boxes_vis = mask_generator.get_boxes()
+        #             pred_boxes_vis = mask_generator.get_boxes()
+        #             target_masks = targets[img_num]['masks']
+        #
+        #             for mask_target_num in range(target_masks.shape[0]): # MASK ID
+        #                 orig_size = targets[img_num]['size']
+        #
+        #
+        #
+        #                 size_no_pad = targets[img_num]['size']
+        #                 resized_rel = post_process_seg(relevance[mask_count], size_no_pad, orig_size)
+        #                 resized_img = post_process_seg.inter_image_bilinear(images[img_num], size_no_pad, orig_size)
+        #                 resized_t_mask = post_process_seg(target_masks_vis[mask_count].unsqueeze(0), size_no_pad, orig_size,
+        #                                                                thresh=False)
+        #                 resized_pred_box = rescale_bboxes(pred_boxes_vis[mask_count], orig_size)
+        #                 resized_target_box = rescale_bboxes(target_boxes[mask_count], orig_size)
+        #
+        #
+        #                 # resized_rel = otsu_thresh(resized_rel, )
+        #                 image = get_image_with_relevance(resized_img, torch.ones_like(resized_img))
+        #                 # img_raw = post_process_seg.inter(images[img_num], orig_size)
+        #                 # img_raw = get_image_with_relevance(img_raw, torch.ones_like(resized_img))
+        #                 fig = plt.figure()
+        #
+        #                 plot_results(fig,image, pred_probs_vis[mask_count], resized_pred_box, 1, title="Prediction")
+        #                 plot_results(fig, image, target_labels[mask_count], resized_target_box, 2, title="GT")
+        #
+        #
+        #                 new_vis = get_image_with_relevance(resized_img, resized_rel)
+        #                 new_vis_2 = show_cam_on_image(resized_img, resized_rel)
+        #                 vis = cv2.cvtColor(new_vis_2, cv2.COLOR_RGB2BGR)
+        #                 # new_vis_3 = show_cam_on_image(resized_img, new_vis)
+        #                 # old_vis = get_image_with_relevance(resized_img, orig_relevance[img_num])
+        #                 gt = get_image_with_relevance(resized_img,
+        #                                             resized_t_mask
+        #                                               )
+        #                 # h_img = cv2.hconcat([image, gt, new_vis, new_vis_2])
+        #
+        #                 ax2 = fig.add_subplot(2, 2, 3)
+        #                 ax2.title.set_text('RelMaps')
+        #
+        #                 plt.imshow(vis.astype(np.uint8))
+        #
+        #                 ax3 = fig.add_subplot(2, 2, 4)
+        #                 ax3.title.set_text('Segmentation')
+        #
+        #                 plt.imshow(gt.astype(np.uint8))
+        #
+        #                 # did_save = cv2.imwrite(f'{output_dir}/train_samples/res_{count}_{img_num}_{mask_target_num}.jpg', h_img)
+        #
+        #                 # plt.imshow(h_img)
+        #                 # plt.show()
+        #                 plt.savefig(f'{output_dir}/train_samples/FIG_res_{count}_{targets[img_num]["image_id"].item()}_{img_num}_{mask_target_num}.jpg', dpi = 300)
+        #                 mask_count += 1
+        #                 plt.close(fig)
+        #
+        #                 del resized_rel
+        #                 del resized_img
+        #                 del resized_t_mask
+        #                 del resized_pred_box
+        #                 del image
+        #                 del resized_target_box
+
+
 
         del outputs
         del samples
@@ -139,8 +233,6 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     model.eval()
     criterion.eval()
 
-    mask_generator = MaskGenerator(model)
-
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Test:'
@@ -159,26 +251,26 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
             output_dir=os.path.join(output_dir, "panoptic_eval"),
         )
 
-
-
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
+        mask_generator = MaskGenerator(model)
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = mask_generator.forward_and_update_feature_map_size(samples)
-        loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
+        with torch.enable_grad():
+            outputs = mask_generator.forward_and_update_feature_map_size(samples)
+            # loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
         weight_dict = criterion.weight_dict
 
         # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
-        loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-                                      for k, v in loss_dict_reduced.items()}
-        metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
-                             **loss_dict_reduced_scaled,
-                             **loss_dict_reduced_unscaled)
-        metric_logger.update(class_error=loss_dict_reduced['class_error'])
+        # loss_dict_reduced = utils.reduce_dict(loss_dict)
+        # loss_dict_reduced_scaled = {k: v * weight_dict[k]
+        #                             for k, v in loss_dict_reduced.items() if k in weight_dict}
+        # loss_dict_reduced_unscaled = {f'{k}_unscaled': v
+        #                               for k, v in loss_dict_reduced.items()}
+        # metric_logger.update(loss=sum(loss_dict_reduced_scaled.values()),
+        #                      **loss_dict_reduced_scaled,
+        #                      **loss_dict_reduced_unscaled)
+        # metric_logger.update(class_error=loss_dict_reduced['class_error'])
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
@@ -198,9 +290,240 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                 res_pano[i]["file_name"] = file_name
 
             panoptic_evaluator.update(res_pano)
+        post_process_seg = PostProcessSegmOne()
+        count = 0
+        save_interval = 1
+        memory_interval = 5
 
-        # torch.cuda.memory_summary(device=None, abbreviated=False)
-        # torch.cuda.empty_cache()
+        # for output bounding box post-processing
+        # def box_cxcywh_to_xyxy(x):
+        #     x_c, y_c, w, h = x.unbind(1)
+        #     b = [(x_c - 0.5 * w), (y_c - 0.5 * h),
+        #          (x_c + 0.5 * w), (y_c + 0.5 * h)]
+        #     return torch.stack(b, dim=1)
+        #
+        # def rescale_bboxes(out_bbox, size):
+        #     img_h, img_w = size
+        #     b = box_cxcywh_to_xyxy(out_bbox)
+        #     b = b.cpu() * torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32)
+        #     return b
+
+        # plot_results_og()
+
+        # im = samples.tensors[0].cpu()
+        # # keep only predictions with 0.7+ confidence
+        # probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
+        # keep = probas.max(-1).values > 0.9
+        #
+        # bboxes_scaled = rescale_bboxes(outputs['pred_boxes'][0, keep], im.cpu().permute(1,2,0).numpy().shape[:2])
+        #
+        # plot_results_og(im.permute(1,2,0).numpy(), probas[keep], bboxes_scaled)
+
+        # for output bounding box post-processing
+        def box_cxcywh_to_xyxy(x):
+            x_c, y_c, w, h = x.unbind(1)
+            b = [(x_c - 0.5 * w), (y_c - 0.5 * h),
+                 (x_c + 0.5 * w), (y_c + 0.5 * h)]
+            return torch.stack(b, dim=1)
+
+        def rescale_bboxes(out_bbox, size):
+            img_w, img_h = size
+            b = box_cxcywh_to_xyxy(out_bbox)
+            b = b * torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32)
+            return b
+
+        def plot_results(pil_img, prob, boxes):
+            plt.figure(figsize=(16, 10))
+            plt.imshow(pil_img)
+            ax = plt.gca()
+            colors = COLORS * 100
+            for p, (xmin, ymin, xmax, ymax), c in zip(prob, boxes.tolist(), colors):
+                ax.add_patch(plt.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+                                           fill=False, color=c, linewidth=3))
+                cl = p.argmax()
+                text = f'{CLASSES[cl]}: {p[cl]:0.2f}'
+                ax.text(xmin, ymin, text, fontsize=15,
+                        bbox=dict(facecolor='yellow', alpha=0.5))
+            plt.axis('off')
+            plt.show()
+
+
+
+
+        # colors for visualization
+        COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
+                  [0.494, 0.184, 0.556], [0.466, 0.674, 0.188], [0.301, 0.745, 0.933]]
+        CLASSES = [
+            'N/A', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+            'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A',
+            'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse',
+            'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack',
+            'umbrella', 'N/A', 'N/A', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis',
+            'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
+            'skateboard', 'surfboard', 'tennis racket', 'bottle', 'N/A', 'wine glass',
+            'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich',
+            'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+            'chair', 'couch', 'potted plant', 'bed', 'N/A', 'dining table', 'N/A',
+            'N/A', 'toilet', 'N/A', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+            'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'N/A',
+            'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
+            'toothbrush'
+        ]
+        gen = MaskGenerator(model).gen
+
+        probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
+        keep = probas.max(-1).values > 0.75
+
+        if keep.nonzero().shape[0] <= 1:
+            return
+
+        outputs['pred_boxes'] = outputs['pred_boxes'].cpu()
+
+        url = 'http://images.cocodataset.org/val2017/000000000776.jpg'
+        im = Image.open(requests.get(url, stream=True).raw)
+
+        # convert boxes from [0; 1] to image scales
+        bboxes_scaled = rescale_bboxes(outputs['pred_boxes'][0, keep.cpu()], im.size)
+
+        # use lists to store the outputs via up-values
+        conv_features, enc_attn_weights, dec_attn_weights = [], [], []
+
+        hooks = [
+            model.backbone[-2].register_forward_hook(
+                lambda self, input, output: conv_features.append(output)
+            ),
+            # model.transformer.encoder.layers[-1].self_attn.register_forward_hook(
+            #     lambda self, input, output: enc_attn_weights.append(output[1])
+            # ),
+            model.transformer.decoder.layers[-1].multihead_attn.register_forward_hook(
+                lambda self, input, output: dec_attn_weights.append(output[1])
+            ),
+        ]
+
+        for layer in model.transformer.encoder.layers:
+            hook = layer.self_attn.register_forward_hook(
+                lambda self, input, output: enc_attn_weights.append(output[1])
+            )
+            hooks.append(hook)
+
+        model(samples)
+
+        for hook in hooks:
+            hook.remove()
+
+        # don't need the list anymore
+        conv_features = conv_features[0]
+        enc_attn_weights = enc_attn_weights[-1]
+        dec_attn_weights = dec_attn_weights[0]
+
+        # get the feature map shape
+        h, w = conv_features['0'].tensors.shape[-2:]
+        img_np = np.array(im).astype(float)
+
+        fig, axs = plt.subplots(ncols=len(bboxes_scaled), nrows=2, figsize=(22, 7))
+        for idx, ax_i, (xmin, ymin, xmax, ymax) in zip(keep.nonzero(), axs.T, bboxes_scaled):
+            ax = ax_i[0]
+            cam = gen.generate_ours(samples, idx, use_lrp=False)
+            cam = (cam - cam.min()) / (cam.max() - cam.min())
+            cmap = plt.cm.get_cmap('Blues').reversed()
+            ax.imshow(cam.view(h, w).data.cpu().numpy(), cmap=cmap)
+            ax.axis('off')
+            ax.set_title(f'query id: {idx.item()}')
+            ax = ax_i[1]
+            ax.imshow(im)
+            ax.add_patch(plt.Rectangle((xmin.detach(), ymin.detach()), xmax.detach() - xmin.detach(),
+                                       ymax.detach() - ymin.detach(),
+                                       fill=False, color='blue', linewidth=3))
+            ax.axis('off')
+            ax.set_title(CLASSES[probas[idx].argmax()])
+        image_id = None
+        id_str = '' if image_id == None else image_id
+        fig.tight_layout()
+        plt.show()
+
+
+
+
+
+        # debugging output
+        # if count % save_interval == 0:
+        #     if output_dir:
+        #         # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
+        #         images = samples.tensors
+        #         relevance = mask_generator.get_relevance()
+        #         target_masks_vis = mask_generator.get_targets()
+        #         pred_probs_vis = mask_generator.get_probs()
+        #         target_boxes = mask_generator.get_tar_boxes()
+        #         target_labels = mask_generator.get_labels()
+        #
+        #         mask_count = 0
+        #         for img_num in range(images.shape[0]):  # IMAGES NUM
+        #             # target_boxes_vis = mask_generator.get_boxes()
+        #             pred_boxes_vis = mask_generator.get_boxes()
+        #             target_masks = targets[img_num]['masks']
+        #
+        #             for mask_target_num in range(target_masks.shape[0]):  # MASK ID
+        #                 orig_size = targets[img_num]['size']
+        #
+        #                 size_no_pad = targets[img_num]['size']
+        #                 resized_rel = post_process_seg(relevance[mask_count], size_no_pad, orig_size)
+        #                 resized_img = post_process_seg.inter_image_bilinear(images[img_num], size_no_pad, orig_size)
+        #                 resized_t_mask = post_process_seg(target_masks_vis[mask_count].unsqueeze(0), size_no_pad,
+        #                                                   orig_size,
+        #                                                   thresh=False)
+        #                 resized_pred_box = rescale_bboxes(pred_boxes_vis[mask_count], orig_size)
+        #                 resized_target_box = rescale_bboxes(target_boxes[mask_count], orig_size)
+        #
+        #                 # resized_rel = otsu_thresh(resized_rel, )
+        #                 image = get_image_with_relevance(resized_img, torch.ones_like(resized_img))
+        #                 # img_raw = post_process_seg.inter(images[img_num], orig_size)
+        #                 # img_raw = get_image_with_relevance(img_raw, torch.ones_like(resized_img))
+        #                 fig = plt.figure()
+        #
+        #                 plot_results(fig, image, pred_probs_vis[mask_count], resized_pred_box, 1, title="Prediction")
+        #                 plot_results(fig, image, target_labels[mask_count], resized_target_box, 2, title="GT")
+        #
+        #                 new_vis = get_image_with_relevance(resized_img, resized_rel)
+        #                 new_vis_2 = show_cam_on_image(resized_img, resized_rel)
+        #                 vis = cv2.cvtColor(new_vis_2, cv2.COLOR_RGB2BGR)
+        #                 # new_vis_3 = show_cam_on_image(resized_img, new_vis)
+        #                 # old_vis = get_image_with_relevance(resized_img, orig_relevance[img_num])
+        #                 gt = get_image_with_relevance(resized_img,
+        #                                               resized_t_mask
+        #                                               )
+        #                 # h_img = cv2.hconcat([image, gt, new_vis, new_vis_2])
+        #
+        #                 ax2 = fig.add_subplot(2, 2, 3)
+        #                 ax2.title.set_text('RelMaps')
+        #
+        #                 plt.imshow(vis.astype(np.uint8))
+        #
+        #                 ax3 = fig.add_subplot(2, 2, 4)
+        #                 ax3.title.set_text('Segmentation')
+        #
+        #                 plt.imshow(gt.astype(np.uint8))
+        #
+        #                 # did_save = cv2.imwrite(f'{output_dir}/train_samples/res_{count}_{img_num}_{mask_target_num}.jpg', h_img)
+        #
+        #                 # plt.imshow(h_img)
+        #                 # plt.show()
+        #                 plt.savefig(
+        #                     f'{output_dir}/test_samples/FIG_res_{count}_{targets[img_num]["image_id"].item()}_{img_num}_{mask_target_num}.jpg',
+        #                     dpi=300)
+        #                 mask_count += 1
+        #                 plt.close(fig)
+        #
+        #                 del resized_rel
+        #                 del resized_img
+        #                 del resized_t_mask
+        #                 del resized_pred_box
+        #                 del image
+        #                 del resized_target_box
+
+        del mask_generator
+        torch.cuda.memory_summary(device=None, abbreviated=False)
+        torch.cuda.empty_cache()
+
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

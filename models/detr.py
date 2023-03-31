@@ -11,11 +11,12 @@ from util import box_ops, model_output_utils
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
+from util.model_output_utils import normalize_rel_maps
 
 from .backbone import build_backbone
 from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegmRelMaps,
-                           dice_loss, sigmoid_focal_loss)
+                           dice_loss, sigmoid_focal_loss, PostProcessSegm)
 from .transformer import build_transformer
 
 
@@ -195,7 +196,7 @@ class SetCriterion(nn.Module):
     def compute_fg_loss(self, relevance_map, target_seg, mse_critertion):
         pointwise_matrices = torch.mul(relevance_map, target_seg.float())
         fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
-        # fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in range(pointwise_matrices.shape[0])]
+        fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in range(pointwise_matrices.shape[0])]
         return fg_mse
 
     def compute_bg_loss(self, relevance_map, target_seg, mse_critertion):
@@ -208,7 +209,7 @@ class SetCriterion(nn.Module):
     def compute_relevance_loss(self, outputs, targets):
         mse_criterion = torch.nn.MSELoss(reduction='mean')
         lamda_fg = 0.4
-        lamga_bg = 0.6
+        lamga_bg = 2
         outputs = outputs.cuda()
         fg_loss = self.compute_fg_loss(outputs, targets, mse_criterion)
         bg_loss = self.compute_bg_loss(outputs, targets, mse_criterion)
@@ -250,14 +251,23 @@ class SetCriterion(nn.Module):
             # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
 
             masks = [t["masks"] for t in targets]
+
+            #for vis
+
+
             # TODO use valid to mask invalid areas due to padding in loss
             # this resizes all mask to (max_h, max_w) size
             target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
+
+
             # target_masks = target_masks.to(src_masks)
 
             # upsample predictions to the target size
             src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
                                     mode="bilinear", align_corners=False)
+            src_masks = normalize_rel_maps(src_masks)
+
+            mask_generator.set_relevance(src_masks)
 
             # # reshape masks from output
             # postprocessors = {'bbox': PostProcessRelMaps()}
@@ -271,8 +281,27 @@ class SetCriterion(nn.Module):
 
             pred_masks = src_masks.squeeze(1)
             target_masks = target_masks[tgt_idx].float()
+
+            pred_boxes = [outputs["pred_boxes"][im][ind].float().cpu().unsqueeze(0) for im,ind in zip(idx[0],idx[1])]
+            pred_boxes = torch.cat(pred_boxes)
+
+            target_boxes = [targets[im]["boxes"][ind].float().cpu().unsqueeze(0) for im,ind in zip(tgt_idx[0],tgt_idx[1])]
+            target_boxes = torch.cat(target_boxes)
+
+            target_labels = [targets[im]["labels"][ind].float().cpu().unsqueeze(0) for im,ind in zip(tgt_idx[0],tgt_idx[1])]
+            target_labels = torch.cat(target_labels)
+
+            pred_probs = [outputs["pred_logits"][im][ind].float().cpu().unsqueeze(0) for im,ind in zip(idx[0],idx[1])]
+            pred_probs = torch.cat(pred_probs)
+
             # loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
             #                      zip(pred_masks, target_masks)]).sum() / num_boxes
+
+            mask_generator.set_targets(target_masks)
+            mask_generator.set_boxes(pred_boxes)
+            mask_generator.set_tar_boxes(target_boxes)
+            mask_generator.set_probs(pred_probs)
+            mask_generator.set_labels(target_labels)
 
             loss = self.compute_relevance_loss(pred_masks,target_masks)
 
@@ -280,12 +309,13 @@ class SetCriterion(nn.Module):
             # del loss
             # loss = torch.tensor([0]).float().cuda()
             # loss.requires_grad_()
+            del target_masks
+            del pred_masks
+
         losses: Dict = {
             "loss_rel_maps": loss
         }
 
-        del target_masks
-        del pred_masks
 
         return losses
 
@@ -471,7 +501,7 @@ def build(args):
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
     matcher = build_matcher(args)
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict = {'loss_ce': 0.000001, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
@@ -496,7 +526,7 @@ def build(args):
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
-        postprocessors['segm'] = PostProcessSegmRelMaps()
+        postprocessors['segm'] = PostProcessSegm()
         if args.dataset_file == "coco_panoptic":
             is_thing_map = {i: i <= 90 for i in range(201)}
             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)

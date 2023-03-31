@@ -239,13 +239,51 @@ class PostProcessSegm(nn.Module):
         return results
 
 
+class PostProcessSegmOne(nn.Module):
+    # Interpolates the mask to real image space
+    def __init__(self, threshold=0.5):
+        super().__init__()
+        self.threshold = threshold
+
+    @torch.no_grad()
+    def forward(self, output_mask,size_no_pad ,orig_size, thresh = True):
+        # assert len(orig_target_sizes) == len(max_target_sizes)
+        # if thresh:
+        #     # output_mask = (output_mask.sigmoid() > self.threshold)
+        #     output_mask = (output_mask > self.threshold)
+        img_h, img_w = size_no_pad[0], size_no_pad[1]
+        mask = output_mask[:, :img_h, :img_w].unsqueeze(1) #removed padding
+        return self.inter_image(mask, orig_size)
+
+    def inter_image(self, img, orig_size):
+        mask = F.interpolate(
+            img.float(), size=tuple(orig_size), mode="nearest"
+        )
+        return mask
+
+    def inter_image_bilinear(self, img, size_no_pad, orig_size):
+        img_h, img_w = size_no_pad[0], size_no_pad[1]
+        img = img[:, :img_h, :img_w].unsqueeze(0)
+        mask = F.interpolate(
+            img.float(), size=tuple(orig_size), mode="bilinear"
+        )
+        return mask
+
+    def inter(self, img, orig_size):
+        return F.interpolate(
+            img.unsqueeze(0).float(), size=tuple(orig_size), mode="bilinear"
+        )
+
+
+
+
 class PostProcessSegmRelMaps(nn.Module):
     # Interpolates the mask to real image space
     def __init__(self, threshold=0.5):
         super().__init__()
         self.threshold = threshold
 
-    # @torch.no_grad()
+    @torch.no_grad()
     def forward(self, results, outputs, orig_target_sizes, max_target_sizes):
         # important - copmutations RN are used with an interpolated mask to size (max_h, max_w)
         assert len(orig_target_sizes) == len(max_target_sizes)
