@@ -11,11 +11,13 @@ from util import box_ops, model_output_utils
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
+from util.model_output_utils import normalize_rel_maps
 
 from .backbone import build_backbone
 from .matcher import build_matcher
+from .rel_comp import compute_rel_loss_from_map
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegmRelMaps,
-                           dice_loss, sigmoid_focal_loss)
+                           dice_loss, sigmoid_focal_loss, PostProcessSegm)
 from .transformer import build_transformer
 
 
@@ -192,28 +194,28 @@ class SetCriterion(nn.Module):
         }
         return losses
 
-    def compute_fg_loss(self, relevance_map, target_seg, mse_critertion):
-        pointwise_matrices = torch.mul(relevance_map, target_seg.float())
-        fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
-        # fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in range(pointwise_matrices.shape[0])]
-        return fg_mse
-
-    def compute_bg_loss(self, relevance_map, target_seg, mse_critertion):
-        neg_target_seg = torch.abs(
-            (torch.ones_like(target_seg.float()) - target_seg.float()))  # this should neg the seg matrix
-        pointwise_matrices = torch.mul(relevance_map, neg_target_seg)
-        bg_mse = mse_critertion(pointwise_matrices, torch.zeros_like(pointwise_matrices))
-        return bg_mse
-
-    def compute_relevance_loss(self, outputs, targets):
-        mse_criterion = torch.nn.MSELoss(reduction='mean')
-        lamda_fg = 0.4
-        lamga_bg = 0.6
-        outputs = outputs.cuda()
-        fg_loss = self.compute_fg_loss(outputs, targets, mse_criterion)
-        bg_loss = self.compute_bg_loss(outputs, targets, mse_criterion)
-        relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
-        return relevance_loss
+    # def compute_fg_loss(self, relevance_map, target_seg, mse_critertion):
+    #     pointwise_matrices = torch.mul(relevance_map, target_seg.float())
+    #     fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
+    #     fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in range(pointwise_matrices.shape[0])]
+    #     return fg_mse
+    #
+    # def compute_bg_loss(self, relevance_map, target_seg, mse_critertion):
+    #     neg_target_seg = torch.abs(
+    #         (torch.ones_like(target_seg.float()) - target_seg.float()))  # this should neg the seg matrix
+    #     pointwise_matrices = torch.mul(relevance_map, neg_target_seg)
+    #     bg_mse = mse_critertion(pointwise_matrices, torch.zeros_like(pointwise_matrices))
+    #     return bg_mse
+    #
+    # def compute_relevance_loss(self, outputs, targets):
+    #     mse_criterion = torch.nn.MSELoss(reduction='mean')
+    #     lamda_fg = 0.4
+    #     lamga_bg = 2
+    #     outputs = outputs.cuda()
+    #     fg_loss = self.compute_fg_loss(outputs, targets, mse_criterion)
+    #     bg_loss = self.compute_bg_loss(outputs, targets, mse_criterion)
+    #     relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
+    #     return relevance_loss
 
 
 
@@ -237,55 +239,20 @@ class SetCriterion(nn.Module):
             # src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
             #                                                                          torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
 
-            #TODO index might need changing! need to compute wrt to the target label and not my best label
-            src_masks = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx )
+            print(torch.cuda.memory_summary())
 
-            print(src_masks.shape)
+            #TODO index might need changing! need to compute wrt to the target label and not my best label
+            loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w)
+
+            print(loss)
             print(h)
             print(w)
-            src_masks = torch.reshape(src_masks, [src_masks.shape[0], src_masks.shape[1], h, w], )
-            # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(outputs,
-            #                                                                           torch.tensor([mask_idx])) for mask_idx
-            #                         in range((masks_amount))]) for i in range(batch_size)]
-            # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
+            # loss = compute_rel_loss_from_map(outputs, idx, h, mask_generator, src_masks, targets, tgt_idx, w)
 
-            masks = [t["masks"] for t in targets]
-            # TODO use valid to mask invalid areas due to padding in loss
-            # this resizes all mask to (max_h, max_w) size
-            target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
-            # target_masks = target_masks.to(src_masks)
-
-            # upsample predictions to the target size
-            src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
-                                    mode="bilinear", align_corners=False)
-
-            # # reshape masks from output
-            # postprocessors = {'bbox': PostProcessRelMaps()}
-            # postprocessors['segm'] = PostProcessSegmRelMaps()
-            # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-            # output_mask_results = postprocessors['bbox'](outputs, orig_target_sizes)
-            # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-            # output_mask_results = postprocessors['segm'](output_mask_results, outputs, orig_target_sizes, target_sizes)
-
-            # get the reshaped pred masks and original mask
-
-            pred_masks = src_masks.squeeze(1)
-            target_masks = target_masks[tgt_idx].float()
-            # loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
-            #                      zip(pred_masks, target_masks)]).sum() / num_boxes
-
-            loss = self.compute_relevance_loss(pred_masks,target_masks)
-
-
-            # del loss
-            # loss = torch.tensor([0]).float().cuda()
-            # loss.requires_grad_()
         losses: Dict = {
             "loss_rel_maps": loss
         }
 
-        del target_masks
-        del pred_masks
 
         return losses
 
@@ -496,7 +463,7 @@ def build(args):
     criterion.to(device)
     postprocessors = {'bbox': PostProcess()}
     if args.masks:
-        postprocessors['segm'] = PostProcessSegmRelMaps()
+        postprocessors['segm'] = PostProcessSegm()
         if args.dataset_file == "coco_panoptic":
             is_thing_map = {i: i <= 90 for i in range(201)}
             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)

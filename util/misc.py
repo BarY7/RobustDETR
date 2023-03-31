@@ -161,6 +161,8 @@ class MetricLogger(object):
         self.meters = defaultdict(SmoothedValue)
         self.delimiter = delimiter
 
+
+
     def update(self, **kwargs):
         for k, v in kwargs.items():
             if isinstance(v, torch.Tensor):
@@ -325,7 +327,9 @@ def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
         tensor = torch.zeros(batch_shape, dtype=dtype, device=device)
         mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
         for img, pad_img, m in zip(tensor_list, tensor, mask):
+            # we copy img to pad_img, rest is padded with zeroes. Size is the max size of the batch on both dimensions
             pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
+            # Mask to allow us to recover the image. False - containes real image content.
             m[: img.shape[1], :img.shape[2]] = False
     else:
         raise ValueError('not supported')
