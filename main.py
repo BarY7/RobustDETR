@@ -118,8 +118,8 @@ def get_args_parser():
 
 
 def main(args):
-    # utils.init_distributed_mode(args)
-    args.distributed = False
+    utils.init_distributed_mode(args)
+    # args.distributed = False
     print("git:\n  {}\n".format(utils.get_sha()))
 
     if args.frozen_weights is not None:
@@ -137,9 +137,6 @@ def main(args):
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-
-    # model = torch.hub.load('facebookresearch/detr', 'detr_resnet50', pretrained=True)
-    # model.eval()
 
     model, criterion, postprocessors = build_model(args)
     model.to(device)

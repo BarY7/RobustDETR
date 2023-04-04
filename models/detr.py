@@ -245,7 +245,8 @@ class SetCriterion(nn.Module):
             # print(torch.cuda.memory_summary())
 
             #TODO index might need changing! need to compute wrt to the target label and not my best label
-            loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w)
+            with mask_generator.no_sync():
+                loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w)
 
             # print(loss)
             # print(h)

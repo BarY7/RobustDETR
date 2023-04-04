@@ -129,7 +129,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
         # we zero grad earlier - each ,ask accumaltes gradient so we can't use it here.
         # optimizer.zero_grad()
-
+        print(loss_dict)
         losses.backward()
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
