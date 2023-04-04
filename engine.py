@@ -13,6 +13,8 @@ import cv2
 import numpy as np
 import requests
 import torch
+from torch.utils.tensorboard import SummaryWriter
+
 from mask_generator import MaskGenerator\
     , rescale_bboxes, plot_results, plot_results_og
 from models.segmentation import PostProcessSegm, PostProcessSegmOne
@@ -30,7 +32,7 @@ from util.model_output_utils import otsu_thresh
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors: Dict[str, nn.Module],
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0, output_dir = None):
+                    device: torch.device, epoch: int, max_norm: float = 0, output_dir = None, logger : SummaryWriter = None):
     post_process_seg = PostProcessSegmOne()
     model.train()
     criterion.train()
@@ -39,6 +41,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
+
+    len_set = len(data_loader)
 
     method: str = 'ours_no_lrp'
     print("using method {0} for visualization".format(method))
@@ -55,15 +59,16 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     #         pass
 
     count = 0
-    save_interval = 1
-    memory_interval = 5
+    save_interval = 100
+    memory_interval = 1000
+
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
         if count % memory_interval == 0:
             print(torch.cuda.memory_summary(device=None, abbreviated=False))
             torch.cuda.empty_cache()
 
-        mask_generator = MaskGenerator(model)
+        mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
 
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -101,7 +106,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
         optimizer.zero_grad()
         loss_dict = criterion(outputs, targets, mask_generator)
-        weight_dict = criterion.weight_dict
+        weight_dict = criterion.weight_dict # verify required grad is false
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
         # reduce losses over all GPUs for logging purposes
@@ -119,7 +124,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             print(loss_dict_reduced)
             sys.exit(1)
 
+        # we zero grad earlier - each ,ask accumaltes gradient so we can't use it here.
         # optimizer.zero_grad()
+
         losses.backward()
         if max_norm > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
@@ -129,83 +136,90 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
+        metric_logger.write_to_tb(logger, "train", (epoch * len_set) + count - 1)
+
         # # debugging output
-        # if count % save_interval == 0:
-        #     if output_dir:
-        #         # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
-        #         images = samples.tensors
-        #         relevance = mask_generator.get_relevance()
-        #         target_masks_vis = mask_generator.get_targets()
-        #         pred_probs_vis = mask_generator.get_probs()
-        #         target_boxes = mask_generator.get_tar_boxes()
-        #         target_labels = mask_generator.get_labels()
-        #
-        #         mask_count = 0
-        #         for img_num in range(images.shape[0]): # IMAGES NUM
-        #             # target_boxes_vis = mask_generator.get_boxes()
-        #             pred_boxes_vis = mask_generator.get_boxes()
-        #             target_masks = targets[img_num]['masks']
-        #
-        #             for mask_target_num in range(target_masks.shape[0]): # MASK ID
-        #                 orig_size = targets[img_num]['size']
-        #
-        #
-        #
-        #                 size_no_pad = targets[img_num]['size']
-        #                 resized_rel = post_process_seg(relevance[mask_count], size_no_pad, orig_size)
-        #                 resized_img = post_process_seg.inter_image_bilinear(images[img_num], size_no_pad, orig_size)
-        #                 resized_t_mask = post_process_seg(target_masks_vis[mask_count].unsqueeze(0), size_no_pad, orig_size,
-        #                                                                thresh=False)
-        #                 resized_pred_box = rescale_bboxes(pred_boxes_vis[mask_count], orig_size)
-        #                 resized_target_box = rescale_bboxes(target_boxes[mask_count], orig_size)
-        #
-        #
-        #                 # resized_rel = otsu_thresh(resized_rel, )
-        #                 image = get_image_with_relevance(resized_img, torch.ones_like(resized_img))
-        #                 # img_raw = post_process_seg.inter(images[img_num], orig_size)
-        #                 # img_raw = get_image_with_relevance(img_raw, torch.ones_like(resized_img))
-        #                 fig = plt.figure()
-        #
-        #                 plot_results(fig,image, pred_probs_vis[mask_count], resized_pred_box, 1, title="Prediction")
-        #                 plot_results(fig, image, target_labels[mask_count], resized_target_box, 2, title="GT")
-        #
-        #
-        #                 new_vis = get_image_with_relevance(resized_img, resized_rel)
-        #                 new_vis_2 = show_cam_on_image(resized_img, resized_rel)
-        #                 vis = cv2.cvtColor(new_vis_2, cv2.COLOR_RGB2BGR)
-        #                 # new_vis_3 = show_cam_on_image(resized_img, new_vis)
-        #                 # old_vis = get_image_with_relevance(resized_img, orig_relevance[img_num])
-        #                 gt = get_image_with_relevance(resized_img,
-        #                                             resized_t_mask
-        #                                               )
-        #                 # h_img = cv2.hconcat([image, gt, new_vis, new_vis_2])
-        #
-        #                 ax2 = fig.add_subplot(2, 2, 3)
-        #                 ax2.title.set_text('RelMaps')
-        #
-        #                 plt.imshow(vis.astype(np.uint8))
-        #
-        #                 ax3 = fig.add_subplot(2, 2, 4)
-        #                 ax3.title.set_text('Segmentation')
-        #
-        #                 plt.imshow(gt.astype(np.uint8))
-        #
-        #                 # did_save = cv2.imwrite(f'{output_dir}/train_samples/res_{count}_{img_num}_{mask_target_num}.jpg', h_img)
-        #
-        #                 # plt.imshow(h_img)
-        #                 # plt.show()
-        #                 plt.savefig(f'{output_dir}/train_samples/FIG_res_{count}_{targets[img_num]["image_id"].item()}_{img_num}_{mask_target_num}.jpg', dpi = 300)
-        #                 mask_count += 1
-        #                 plt.close(fig)
-        #
-        #                 del resized_rel
-        #                 del resized_img
-        #                 del resized_t_mask
-        #                 del resized_pred_box
-        #                 del image
-        #                 del resized_target_box
 
+        # debugging output
+        if count % save_interval == 0:
+            if output_dir:
+                # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
+                images = samples.tensors
+                relevance = mask_generator.get_relevance()
+                target_masks_vis = mask_generator.get_targets()
+                pred_probs_vis = mask_generator.get_probs()
+                target_boxes = mask_generator.get_tar_boxes()
+                target_labels = mask_generator.get_labels()
+                query_ids = mask_generator.get_query_ids()
 
+                mask_count = 0
+                for img_num in range(images.shape[0]):  # IMAGES NUM
+                    # target_boxes_vis = mask_generator.get_boxes()
+                    pred_boxes_vis = mask_generator.get_boxes()
+                    target_masks = targets[img_num]['masks']
+
+                    for mask_target_num in range(target_masks.shape[0]):  # MASK ID
+
+                        orig_rel = mask_generator.get_orig_rel()
+                        orig_size = targets[img_num]['orig_size']
+
+                        size_no_pad = targets[img_num]['size']
+                        resized_rel = post_process_seg(relevance[mask_count], size_no_pad, orig_size)
+                        resized_img = post_process_seg.inter_image_bilinear(images[img_num], size_no_pad, orig_size)
+                        resized_t_mask = post_process_seg(target_masks_vis[mask_count], size_no_pad,
+                                                          orig_size,
+                                                          thresh=False)
+                        resized_pred_box = rescale_bboxes(pred_boxes_vis[mask_count], orig_size)
+                        resized_target_box = rescale_bboxes(target_boxes[mask_count], orig_size)
+
+                        # resized_rel = otsu_thresh(resized_rel, )
+                        image = get_image_with_relevance(resized_img, torch.ones_like(resized_img))
+                        # img_raw = post_process_seg.inter(images[img_num], orig_size)
+                        # img_raw = get_image_with_relevance(img_raw, torch.ones_like(resized_img))
+                        fig = plt.figure()
+
+                        plot_results(fig, image, pred_probs_vis[mask_count], resized_pred_box, 1, title="Prediction")
+                        plot_results(fig, image, target_labels[mask_count], resized_target_box, 2, title="GT")
+
+                        new_vis = get_image_with_relevance(resized_img, resized_rel)
+                        new_vis_2 = show_cam_on_image(resized_img, resized_rel)
+                        vis = cv2.cvtColor(new_vis_2, cv2.COLOR_RGB2BGR)
+                        # new_vis_3 = show_cam_on_image(resized_img, new_vis)
+                        # old_vis = get_image_with_relevance(resized_img, orig_relevance[img_num])
+                        gt = get_image_with_relevance(resized_img,
+                                                      resized_t_mask
+                                                      )
+                        # h_img = cv2.hconcat([image, gt, new_vis, new_vis_2])
+
+                        ax2 = fig.add_subplot(3, 2, 3)
+                        ax2.title.set_text('RelMaps')
+
+                        plt.imshow(vis.astype(np.uint8))
+
+                        ax3 = fig.add_subplot(3, 2, 4)
+                        ax3.title.set_text('Segmentation')
+
+                        cmap = plt.cm.get_cmap('Blues').reversed()
+                        plt.imshow(orig_rel[mask_count].view(mask_generator.h, mask_generator.w).data.cpu().numpy(), cmap=cmap)
+
+                        plt.imshow(gt.astype(np.uint8))
+
+                        # did_save = cv2.imwrite(f'{output_dir}/train_samples/res_{count}_{img_num}_{mask_target_num}.jpg', h_img)
+
+                        # plt.imshow(h_img)
+                        # plt.show()
+                        plt.savefig(
+                            f'{output_dir}/train_samples/FIG_res_EPOCH_{epoch}_{count}_img{targets[img_num]["image_id"].item()}_{img_num}_query_{query_ids[mask_count]}_{mask_target_num}.jpg',
+                            dpi=300)
+                        mask_count += 1
+                        plt.close(fig)
+
+                        del resized_rel
+                        del resized_img
+                        del resized_t_mask
+                        del resized_pred_box
+                        del image
+                        del resized_target_box
 
         del outputs
         del samples
@@ -224,8 +238,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
 
 
-# @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir, is_rel_maps: bool = False):
+@torch.no_grad()
+def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epoch, output_dir, logger = None):
     model.eval()
     criterion.eval()
 
@@ -234,8 +248,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     header = 'Test:'
 
     iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
-    if (is_rel_maps):
-        iou_types += 'segm'
+    # if (is_rel_maps):
+    #     iou_types += ('segm')
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
     # coco_evaluator.coco_eval[iou_types[0]].params.iouThrs = [0, 0.1, 0.5, 0.75]
 
@@ -247,8 +261,11 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
             output_dir=os.path.join(output_dir, "panoptic_eval"),
         )
     # with torch.autograd.set_detect_anomaly(True):
+    len_set = len(data_loader)
+    count = 0
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
-        mask_generator = MaskGenerator(model)
+        count += 1
+        mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -267,6 +284,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                              **loss_dict_reduced_scaled,
                              **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
+
+        metric_logger.write_to_tb(logger, "test", (epoch * len_set) + count - 1)
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
@@ -287,8 +306,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
 
             panoptic_evaluator.update(res_pano)
         post_process_seg = PostProcessSegmOne()
-        count = 0
-        save_interval = 1
+        save_interval = 5
         memory_interval = 5
 
         # for output bounding box post-processing
@@ -394,7 +412,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
 
             outputs['pred_boxes'] = outputs['pred_boxes'].cpu()
 
-            url = 'http://images.cocodataset.org/val2017/000000000776.jpg'
+            url = 'http://images.cocodataset.org/val2017/000000120853.jpg'
             im = Image.open(requests.get(url, stream=True).raw)
 
             # convert boxes from [0; 1] to image scales
@@ -456,10 +474,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
             fig.tight_layout()
             plt.show()
 
-
-
-
-
+        # bear_vis()
+        
         # debugging output
         if count % save_interval == 0:
             if output_dir:
@@ -467,9 +483,10 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                 images = samples.tensors
                 relevance = mask_generator.get_relevance()
                 target_masks_vis = mask_generator.get_targets()
-                pred_probs_vis = mask_generator.get_probs()
+                pred_probs_vis = mask_generator.get_probs().softmax(-1)
                 target_boxes = mask_generator.get_tar_boxes()
                 target_labels = mask_generator.get_labels()
+                query_ids = mask_generator.get_query_ids()
 
                 mask_count = 0
                 for img_num in range(images.shape[0]):  # IMAGES NUM
@@ -480,7 +497,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                     for mask_target_num in range(target_masks.shape[0]):  # MASK ID
 
                         orig_rel = mask_generator.get_orig_rel()
-                        orig_size = targets[img_num]['size']
+                        orig_size = targets[img_num]['orig_size']
 
                         size_no_pad = targets[img_num]['size']
                         resized_rel = post_process_seg(relevance[mask_count], size_no_pad, orig_size)
@@ -510,25 +527,27 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                                                       )
                         # h_img = cv2.hconcat([image, gt, new_vis, new_vis_2])
 
-                        ax2 = fig.add_subplot(2, 2, 3)
+                        ax2 = fig.add_subplot(3, 2, 3)
                         ax2.title.set_text('RelMaps')
 
                         plt.imshow(vis.astype(np.uint8))
 
-                        ax3 = fig.add_subplot(2, 2, 4)
+                        ax3 = fig.add_subplot(3, 2, 4)
                         ax3.title.set_text('Segmentation')
 
                         cmap = plt.cm.get_cmap('Blues').reversed()
                         plt.imshow(orig_rel[mask_count].view(mask_generator.h, mask_generator.w).data.cpu().numpy(), cmap=cmap)
 
-                        # plt.imshow(gt.astype(np.uint8))
+                        ax4 = fig.add_subplot(3, 2, 5)
+                        ax4.title.set_text('RelMaps(Hila)')
+                        plt.imshow(gt.astype(np.uint8))
 
                         # did_save = cv2.imwrite(f'{output_dir}/train_samples/res_{count}_{img_num}_{mask_target_num}.jpg', h_img)
 
                         # plt.imshow(h_img)
                         # plt.show()
                         plt.savefig(
-                            f'{output_dir}/test_samples/FIG_res_{count}_{targets[img_num]["image_id"].item()}_{img_num}_{mask_target_num}.jpg',
+                            f'{output_dir}/test_samples/FIG_res_EPOCH_{epoch}_{count}_{count}_img{targets[img_num]["image_id"].item()}_{img_num}_query_{query_ids[mask_count]}_{mask_target_num}.jpg',
                             dpi=300)
                         mask_count += 1
                         plt.close(fig)
@@ -541,8 +560,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                         del resized_target_box
 
         del mask_generator
-        torch.cuda.memory_summary(device=None, abbreviated=False)
-        torch.cuda.empty_cache()
+        # torch.cuda.memory_summary(device=None, abbreviated=False)
+        # torch.cuda.empty_cache()
 
 
     # gather the stats from all processes
@@ -564,10 +583,15 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     if coco_evaluator is not None:
         if 'bbox' in postprocessors.keys():
             stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
+            stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
+            for name, val in zip(stat_names,stats['coco_eval_bbox']):
+                logger.add_scalar(f'eval_{name}', val , epoch)
         if 'segm' in postprocessors.keys():
             stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
     if panoptic_res is not None:
         stats['PQ_all'] = panoptic_res["All"]
         stats['PQ_th'] = panoptic_res["Things"]
         stats['PQ_st'] = panoptic_res["Stuff"]
+
+
     return stats, coco_evaluator

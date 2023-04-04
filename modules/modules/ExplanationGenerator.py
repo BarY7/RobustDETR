@@ -341,17 +341,17 @@ class Generator:
 
         agg_list = []
 
+        l = 0
+
         for img_idx, mask_idx, tgt_img_idx, tgt_mask_idx in zip(batch_target_idx[0],batch_target_idx[1], tgt_idx[0], tgt_idx[1]):
-            print(torch.cuda.memory_summary())
-            if index == None:
-                # index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
-                index = outputs_logits[img_idx, mask_idx, :-1].argmax(0)
+            # print(torch.cuda.memory_summary())
+            # index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
+            index = outputs_logits[img_idx, mask_idx, :-1].argmax(0)
             one_hot = torch.zeros_like(outputs_logits).to(outputs_logits.device)
             one_hot[img_idx, mask_idx, index] = 1
             # one_hot[batch_target_idx[0][0], batch_target_idx[1][0], index] = 1
             one_hot_vector = one_hot
             one_hot.requires_grad_(True)
-            self.model.zero_grad()
             one_hot = torch.sum(one_hot.cuda() * outputs_logits)
 
             # self.model.zero_grad()
@@ -404,12 +404,32 @@ class Generator:
             # del self.R_q_i
 
             cam = self.norm_rel_maps(aggregated)
-            l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
-            l.backward(retain_graph=True)
-            #NOW EVERYTHING CAN BE SAFELY DELETED.
-            print(l)
+            l = l + compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
+            l = l * mask_generator.get_weight_coef()
+            if mask_generator.is_train_mode():
+                l.backward(retain_graph=True)
             agg_list.append(torch.tensor(l.detach().item()))
             del l
+            l = 0
+
+            # loss_batch_count += 1
+            # if loss_batch_count == 3 :
+            #     loss_batch_count = 0
+            #     l = l * mask_generator.get_weight_coef()
+            #     l.backward(retain_graph=True)
+            #     agg_list.append(torch.tensor(l.detach().item()))
+            #     del l
+            #     l = 0
+
+        # l.backward(retain_graph=True)
+        #NOW EVERYTHING CAN BE SAFELY DELETED.
+        # if l != 0:
+        #     loss_batch_count = 0
+        #     l.backward(retain_graph=True)
+        #     agg_list.append(torch.tensor(l.detach().item()))
+        #     l = 0
+        # print(l)
+        del l
 
 
         return torch.tensor(agg_list).to(device).sum()

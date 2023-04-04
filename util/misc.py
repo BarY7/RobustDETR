@@ -19,6 +19,8 @@ from torch import Tensor
 
 # needed due to empty tensor bug in pytorch and torchvision 0.5
 import torchvision
+from torch.utils.tensorboard import SummaryWriter
+
 if version.parse(torchvision.__version__) < version.parse('0.7'):
     from torchvision.ops import _new_empty_tensor
     from torchvision.ops.misc import _output_size
@@ -185,6 +187,11 @@ class MetricLogger(object):
                 "{}: {}".format(name, str(meter))
             )
         return self.delimiter.join(loss_str)
+
+    def write_to_tb(self, logger: SummaryWriter,stage, step):
+        for name, meter in self.meters.items():
+            logger.add_scalar(f'{stage}_{name}', meter.value , step)
+
 
     def synchronize_between_processes(self):
         for meter in self.meters.values():

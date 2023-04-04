@@ -227,6 +227,9 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         tgt_idx = self._get_tgt_permutation_idx(indices)
 
+        # idx[1][0] = 43
+        # idx[1][1] = 87
+
         # get src masks from outputs, just for the 'true' masks
         h, w = mask_generator.h, mask_generator.w
 
@@ -239,18 +242,18 @@ class SetCriterion(nn.Module):
             # src_masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(model_output_utils.get_one_output_from_batch(outputs, i),
             #                                                                          torch.tensor([mask_idx])) for (i, mask_idx) in zip(idx[0], idx[1])])
 
-            print(torch.cuda.memory_summary())
+            # print(torch.cuda.memory_summary())
 
             #TODO index might need changing! need to compute wrt to the target label and not my best label
             loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w)
 
-            print(loss)
-            print(h)
-            print(w)
+            # print(loss)
+            # print(h)
+            # print(w)
             # loss = compute_rel_loss_from_map(outputs, idx, h, mask_generator, src_masks, targets, tgt_idx, w)
 
         losses: Dict = {
-            "loss_rel_maps": loss
+            "loss_rel_maps": loss / mask_generator.get_weight_coef()
         }
 
 
@@ -456,7 +459,7 @@ def build(args):
     if args.masks:
         losses += ["masks"]
     if args.rel_maps:
-        losses = ["labels", "rel_maps"] #notice it replaces ,not plus
+        losses = ["labels", "boxes", "rel_maps"] #notice it replaces ,not plus
         # losses = ["labels", "boxes"]  # notice it replaces ,not plus
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)

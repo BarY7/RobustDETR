@@ -36,7 +36,7 @@ def rescale_bboxes(out_bbox, size):
     return b
 
 def plot_results(fig,pil_img, p, box, idx, title=''):
-    ax1 = fig.add_subplot(2, 2, idx)
+    ax1 = fig.add_subplot(3, 2, idx)
     ax1.title.set_text(title)
     plt.imshow(pil_img.astype(np.uint32))
     ax = plt.gca()
@@ -96,12 +96,13 @@ COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
           [0.494, 0.184, 0.556], [0.466, 0.674, 0.188], [0.301, 0.745, 0.933]]
 
 class MaskGenerator:
-    def __init__(self, model):
+    def __init__(self, model, weight_coef):
         self.gen = Generator(model)
         # self.abl = GeneratorAlbationNoAgg(model)
         self.model = model
         self.h = None
         self.w = None
+        self.weight_coef = weight_coef
 
         # for debugging purpose, only value
         self.relevance = None
@@ -112,6 +113,7 @@ class MaskGenerator:
         self.tar_boxes = None
 
         self.orig_rel = None
+        self.query_ids = None
 
     def forward_and_update_feature_map_size(self,  samples):
         # keep only predictions with 0.8+ confidence
@@ -158,6 +160,10 @@ class MaskGenerator:
 
         return outputs
 
+    def is_train_mode(self):
+        return self.model.training
+    def get_weight_coef(self):
+        return self.weight_coef
     def get_panoptic_masks(self, outputs, samples,targets,method):
                 # propagate through the model
 
@@ -292,12 +298,13 @@ class MaskGenerator:
         mask_generator.set_tar_boxes(target_boxes)
         mask_generator.set_probs(pred_probs)
         mask_generator.set_labels(target_labels)
+        mask_generator.set_query_ids(idx[1])
 
         cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w, use_lrp=False)
         # normalize !each mask! by its min and max
 
 
-        print("DONE WITH REL MAPS!")
+        # print("DONE WITH REL MAPS!")
         # cam = normalize_rel_maps(cam)
         # cam = cam.unsqueeze(1).unsqueeze(1)
         # cam = (cam - cam.min()) / (cam.max() - cam.min()) \
@@ -345,7 +352,11 @@ class MaskGenerator:
         return self.tar_boxes
 
     def set_targets(self, target_masks):
-        self.target_masks = target_masks
+        target_masks = target_masks.unsqueeze(0).unsqueeze(0).detach()
+        if (self.target_masks is None):
+            self.target_masks = target_masks
+        else:
+            self.target_masks = torch.cat([self.target_masks, target_masks])
 
     def get_targets(self):
         return self.target_masks
@@ -356,6 +367,11 @@ class MaskGenerator:
     def get_probs(self):
         return self.probs
 
+    def set_query_ids(self, query_ids):
+        self.query_ids = query_ids
+
+    def get_query_ids(self):
+        return self.query_ids
 
     def get_panoptic(self, samples, targets, method):
         outputs = self.model(samples)

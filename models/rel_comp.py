@@ -61,7 +61,6 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     src_masks = normalize_rel_maps(src_masks)
 
     mask_generator.set_relevance(src_masks)
-    mask_generator.set_targets(target_masks[tgt_idx].unsqueeze(1))
 
     # # reshape masks from output
     # postprocessors = {'bbox': PostProcessRelMaps()}
@@ -75,6 +74,9 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     pred_masks = src_masks.squeeze(0).squeeze(0)
         # .squeeze(1)
     target_masks = target_masks[tgt_img_num][tgt_mask_idx].float()
+
+    mask_generator.set_targets(target_masks)
+
     # pred_boxes = [outputs["pred_boxes"][im][ind].float().cpu().unsqueeze(0) for im, ind in zip(idx[0], idx[1])]
     # pred_boxes = torch.cat(pred_boxes)
     # target_boxes = [targets[im]["boxes"][ind].float().cpu().unsqueeze(0) for im, ind in zip(tgt_idx[0], tgt_idx[1])]
@@ -86,9 +88,6 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     # pred_probs = torch.cat(pred_probs)
     # loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
     #                      zip(pred_masks, target_masks)]).sum() / num_boxes
-
-
-
 
     loss = compute_relevance_loss(pred_masks, target_masks)
     # del loss

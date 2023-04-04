@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
 
 import datasets
 import util.misc as utils
@@ -40,6 +41,9 @@ def get_args_parser():
                         help="If true, we replace stride with dilation in the last convolutional block (DC5)")
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
+
+    parser.add_argument('--img_limit', default= 10000, type=int)
+    parser.add_argument('--img_limit_eval', default=500, type=int)
 
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
@@ -81,7 +85,7 @@ def get_args_parser():
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--relmap_loss_coef', default=60, type=float)
+    parser.add_argument('--relmap_loss_coef', default=3.5, type=float)
     parser.add_argument('--lambda_background', default=2, type=float,
                         help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,
@@ -121,6 +125,8 @@ def main(args):
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
+
+    logger = SummaryWriter(log_dir=f'{args.output_dir}/tb_logs')
 
     # if(torch.hub.set_dir()):
     #     print(2)
@@ -201,8 +207,9 @@ def main(args):
             args.start_epoch = checkpoint['epoch'] + 1
 
     if args.eval:
-        test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
+        test_stats, coco_evaluator = evaluate(
+            model, criterion, postprocessors, data_loader_val, base_ds, device, -1, args.output_dir, logger
+        )
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
@@ -214,7 +221,7 @@ def main(args):
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
             model, criterion, postprocessors, data_loader_train, optimizer, device, epoch,
-            args.clip_max_norm, args.output_dir)
+            args.clip_max_norm, args.output_dir, logger)
         lr_scheduler.step()
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
@@ -232,7 +239,7 @@ def main(args):
 
 
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+            model, criterion, postprocessors, data_loader_val, base_ds, device, epoch, args.output_dir, logger
         )
 
         log_stats = {
@@ -266,4 +273,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        Path(f'{args.output_dir}/tb_logs').mkdir(parents=True, exist_ok=True)
+        Path(f'{args.output_dir}/train_samples').mkdir(parents=True, exist_ok=True)
+        Path(f'{args.output_dir}/test_samples').mkdir(parents=True, exist_ok=True)
     main(args)
