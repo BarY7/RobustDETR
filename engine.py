@@ -264,6 +264,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     len_set = len(data_loader)
     count = 0
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
+        # torch.cuda.memory_summary(device=None, abbreviated=False)
         count += 1
         mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
         samples = samples.to(device)
