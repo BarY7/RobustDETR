@@ -406,6 +406,7 @@ class Generator:
             cam = self.norm_rel_maps(aggregated)
             l = l + compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
             l = l * mask_generator.get_weight_coef()
+            # print(torch.cuda.memory_summary())
             if mask_generator.is_train_mode():
                 l.backward(retain_graph=True)
             agg_list.append(torch.tensor(l.detach().item()))

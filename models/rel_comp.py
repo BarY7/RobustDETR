@@ -60,7 +60,7 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
                             mode="bilinear", align_corners=False)
     src_masks = normalize_rel_maps(src_masks)
 
-    mask_generator.set_relevance(src_masks)
+    mask_generator.set_relevance(src_masks.detach())
 
     # # reshape masks from output
     # postprocessors = {'bbox': PostProcessRelMaps()}
@@ -75,7 +75,7 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
         # .squeeze(1)
     target_masks = target_masks[tgt_img_num][tgt_mask_idx].float()
 
-    mask_generator.set_targets(target_masks)
+    mask_generator.set_targets(target_masks.detach())
 
     # pred_boxes = [outputs["pred_boxes"][im][ind].float().cpu().unsqueeze(0) for im, ind in zip(idx[0], idx[1])]
     # pred_boxes = torch.cat(pred_boxes)
