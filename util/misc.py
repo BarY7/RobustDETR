@@ -427,6 +427,7 @@ def init_distributed_mode(args):
         print(f"procid {os.environ['SLURM_PROCID']}")
         args.rank = int(os.environ['SLURM_PROCID'])
         args.gpu = args.rank % torch.cuda.device_count()
+        os.environ['MASTER_ADDR'] = 'localhost'
     else:
         print('Not using distributed mode')
         args.distributed = False
