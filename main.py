@@ -44,8 +44,8 @@ def get_args_parser():
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 
-    parser.add_argument('--img_limit', default= 10000, type=int)
-    parser.add_argument('--img_limit_eval', default=500, type=int)
+    parser.add_argument('--img_limit', type=int)
+    parser.add_argument('--img_limit_eval', type=int)
     parser.add_argument(('--eval_every'), default=5, type=int)
 
     # * Transformer
