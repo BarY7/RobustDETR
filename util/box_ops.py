@@ -57,6 +57,8 @@ def generalized_box_iou(boxes1, boxes2):
         sys.stderr.write(str(err))
         sys.stderr.write(str(boxes1))
         sys.stderr.write(str(boxes2))
+        sys.stderr.write("BBOX ERROR")
+        raise err
     iou, union = box_iou(boxes1, boxes2)
 
     lt = torch.min(boxes1[:, None, :2], boxes2[:, :2])

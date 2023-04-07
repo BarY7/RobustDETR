@@ -109,6 +109,7 @@ class SetCriterion(nn.Module):
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
 
+
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
@@ -116,11 +117,43 @@ class SetCriterion(nn.Module):
         assert 'pred_logits' in outputs
         src_logits = outputs['pred_logits']
 
+        # before - need to handle targets before comparison. Now just take orig model pred
+        # which contains all 100 boxes
+        idx = self._get_src_permutation_idx(indices)
+        target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        # target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+        #                             dtype=torch.int64, device=src_logits.device)
+        target_classes = torch.cat([t["o_pred_logits"].unsqueeze(0) for t in targets])
+        target_classes[idx] = target_classes_o
+
+
+        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+        # loss_ce = F.cross_entropy(src_logits[idx], target_classes_o, self.empty_weight)
+        losses = {'loss_ce': loss_ce}
+
+        if log:
+            # TODO this should probably be a separate loss, not hacked in this one here
+            losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
+        return losses
+
+
+
+    def loss_labels_old(self, outputs, targets, indices, num_boxes, log=True):
+        """Classification loss (NLL)
+        targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+        """
+        assert 'pred_logits' in outputs
+        src_logits = outputs['pred_logits']
+
+        # before - need to handle targets before comparison. Now just take orig model pred
+        # which contains all 100 boxes
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
+
+        # target_classes = torch.cat([t["o_pred_logits"].unsqueeze(0) for t in targets])
 
         loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
         losses = {'loss_ce': loss_ce}
@@ -364,37 +397,37 @@ class PostProcess(nn.Module):
         return results
 
 
-class PostProcessRelMaps(nn.Module):
-    """ This module converts the model's output into the format expected by the coco api"""
-
-    # @torch.no_grad()
-    def forward(self, outputs, target_sizes):
-        """ Perform the computation
-        Parameters:
-            outputs: raw outputs of the model
-            target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
-                          For evaluation, this must be the original image size (before any data augmentation)
-                          For visualization, this should be the image size after data augment, but before padding
-        """
-        out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
-
-        assert len(out_logits) == len(target_sizes)
-        assert target_sizes.shape[1] == 2
-
-        prob = F.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
-
-        # convert to [x0, y0, x1, y1] format
-        boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
-        # and from relative [0, 1] to absolute [0, height] coordinates
-        img_h, img_w = target_sizes.unbind(1)
-        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
-        boxes = boxes * scale_fct[:, None, :]
-
-        results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
-
-        return results
-
+# class PostProcessRelMaps(nn.Module):
+#     """ This module converts the model's output into the format expected by the coco api"""
+#
+#     # @torch.no_grad()
+#     def forward(self, outputs, target_sizes):
+#         """ Perform the computation
+#         Parameters:
+#             outputs: raw outputs of the model
+#             target_sizes: tensor of dimension [batch_size x 2] containing the size of each images of the batch
+#                           For evaluation, this must be the original image size (before any data augmentation)
+#                           For visualization, this should be the image size after data augment, but before padding
+#         """
+#         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
+#
+#         assert len(out_logits) == len(target_sizes)
+#         assert target_sizes.shape[1] == 2
+#
+#         prob = F.softmax(out_logits, -1)
+#         scores, labels = prob[..., :-1].max(-1)
+#
+#         # convert to [x0, y0, x1, y1] format
+#         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
+#         # and from relative [0, 1] to absolute [0, height] coordinates
+#         img_h, img_w = target_sizes.unbind(1)
+#         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+#         boxes = boxes * scale_fct[:, None, :]
+#
+#         results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+#
+#         return results
+#
 
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
@@ -470,5 +503,7 @@ def build(args):
         if args.dataset_file == "coco_panoptic":
             is_thing_map = {i: i <= 90 for i in range(201)}
             postprocessors["panoptic"] = PostProcessPanoptic(is_thing_map, threshold=0.85)
+    if args.rel_maps:
+        postprocessors['segm'] = PostProcessSegmRelMaps()
 
     return model, criterion, postprocessors

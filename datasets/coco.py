@@ -17,7 +17,7 @@ import datasets.transforms as T
 class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks, limit = None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
-        self.ids = self.ids[:limit]
+        # self.ids = self.ids[39:39+limit]
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
 
@@ -149,8 +149,12 @@ def build(image_set, args):
     root = Path(args.coco_path)
     assert root.exists(), f'provided COCO path {root} does not exist'
     mode = 'instances'
+    if(args.coco_annot_name):
+        coco_train_annot = args.coco_annot_name
+    else:
+        coco_train_annot = f'{mode}_train2017.json'
     PATHS = {
-        "train": (root / "train2017", root / "annotations" / f'{mode}_train2017.json'),
+        "train": (root / "train2017", root / "annotations" / coco_train_annot),
         "val": (root / "val2017", root / "annotations" / f'{mode}_val2017.json'),
     }
 
