@@ -322,7 +322,7 @@ class Generator:
 
     # I removed relprop
 
-    def generate_ours_from_outputs_batchified(self, outputs, batch_target_idx, h, mask_generator, targets, tgt_idx, w, index=None, use_lrp=True, normalize_self_attention=True, apply_self_in_rule_10=True):
+    def generate_ours_from_outputs_batchified(self, outputs, batch_target_idx, h, mask_generator, targets, tgt_idx, w, index=None, use_lrp=False, normalize_self_attention=True, apply_self_in_rule_10=True):
         self.use_lrp = use_lrp
         self.normalize_self_attention = normalize_self_attention
         self.apply_self_in_rule_10 = apply_self_in_rule_10

@@ -6,6 +6,8 @@ import io
 from collections import defaultdict
 from typing import List, Optional
 
+import cv2
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -284,27 +286,44 @@ class PostProcessSegmRelMaps(nn.Module):
         self.threshold = threshold
 
     @torch.no_grad()
-    def forward(self, results, outputs, orig_target_sizes, max_target_sizes):
-        # important - copmutations RN are used with an interpolated mask to size (max_h, max_w)
+    def forward(self, results, outputs, orig_target_sizes, max_target_sizes, src_idx):
         assert len(orig_target_sizes) == len(max_target_sizes)
+        assert len(orig_target_sizes) == 1 #batch size, else need to refactor this
         max_h, max_w = max_target_sizes.max(0)[0].tolist()
-        outputs_masks = outputs["pred_masks"].squeeze(2)
-        # x = F.interpolate(outputs_masks[0].unsqueeze(0), size=(max_h, max_w), mode="bilinear", align_corners=False)
-        # outputs_masks = (outputs_masks.sigmoid() > self.threshold).cpu()
-        for i in range(len(outputs_masks)):
-            results[i]["re_pred_masks"] = outputs_masks[i]
-            t_x, t_y = max_target_sizes[i]
-            tmp = F.interpolate(outputs_masks[i].unsqueeze(0), size=(t_x, t_y), mode="bilinear", align_corners=False)
-            tmp = tmp.sigmoid() #do we need this?
-            results[i]["re_pred_masks"] = tmp.squeeze(0)
-        # this part resizes the mask to the original image size
 
-        # for i, (cur_mask, t, tt) in enumerate(zip(outputs_masks, max_target_sizes, orig_target_sizes)):
-        #     img_h, img_w = t[0], t[1]
-        #     results[i]["re_pred_masks"] = cur_mask[:, :img_h, :img_w].unsqueeze(1)
-        #     results[i]["re_pred_masks"] = F.interpolate(
-        #         results[i]["re_pred_masks"].float(), size=tuple(tt.tolist()), mode="nearest"
-        #     ).byte()
+        cam = outputs["pred_masks"]
+
+        # Otsu
+        # already did it before
+        # cam = (cam - cam.min()) / (cam.max() - cam.min()) * 255
+
+        for i in range(cam.shape[0]):
+            reshaped_single_cam = cam[i].squeeze(0) * 255
+            Res_img = reshaped_single_cam.data.cpu().numpy().astype(np.uint8)
+            ret, th = cv2.threshold(Res_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            cam[i] = torch.from_numpy(th).to(outputs["pred_logits"].device).type(torch.float32).unsqueeze(0)
+        # cam = cam.squeeze(2)
+
+        cam = F.interpolate(cam, size=(max_h, max_w), mode="bilinear", align_corners=False)
+        cam = (cam.sigmoid() > self.threshold).cpu()
+
+
+        dummy_masks = outputs["pred_masks_dummy"]
+
+        indexes = list(zip(src_idx[0], src_idx[1]))
+        for i, (cur_mask, t, tt) in enumerate(zip(cam, max_target_sizes, orig_target_sizes)):
+            cur_img_idx = indexes[i][0]
+            cur_mask_src_idx = indexes[i][1]
+
+            img_h, img_w = t[0], t[1]
+            mask = cur_mask[:, :img_h, :img_w].unsqueeze(1)
+            mask = F.interpolate(
+                   mask.float(), size=tuple(tt.tolist()), mode="nearest"
+                ).byte()
+            dummy_masks[cur_img_idx, cur_mask_src_idx] = mask
+
+        for i, (cur_mask, t, tt) in enumerate(zip(dummy_masks, max_target_sizes, orig_target_sizes)):
+            results[i]["masks"] = cur_mask.unsqueeze(1)
 
         return results
 

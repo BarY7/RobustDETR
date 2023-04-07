@@ -2,9 +2,11 @@
 import argparse
 import datetime
 import json
+import os
 import random
 import time
 from pathlib import Path
+import copy
 
 import numpy as np
 import torch
@@ -22,7 +24,7 @@ from sys import platform
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
-    parser.add_argument('--lr', default=1e-4, type=float)
+    parser.add_argument('--lr', default=3e-5, type=float)
     parser.add_argument('--lr_backbone', default=0, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
@@ -44,6 +46,7 @@ def get_args_parser():
 
     parser.add_argument('--img_limit', default= 10000, type=int)
     parser.add_argument('--img_limit_eval', default=500, type=int)
+    parser.add_argument(('--eval_every'), default=5, type=int)
 
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
@@ -85,7 +88,7 @@ def get_args_parser():
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--relmap_loss_coef', default=3.5, type=float)
+    parser.add_argument('--relmap_loss_coef', default=4, type=float)
     parser.add_argument('--lambda_background', default=2, type=float,
                         help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,
@@ -96,6 +99,7 @@ def get_args_parser():
     # dataset parameters
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', type=str)
+    parser.add_argument('--coco_annot_name', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
 
@@ -119,6 +123,9 @@ def get_args_parser():
 
 def main(args):
     # utils.init_distributed_mode(args)
+
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
     args.distributed = False
     print("git:\n  {}\n".format(utils.get_sha()))
 
@@ -126,7 +133,9 @@ def main(args):
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
 
-    logger = SummaryWriter(log_dir=f'{args.output_dir}/tb_logs')
+    tb_path = f'{args.output_dir}/tb_logs/{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
+    Path(tb_path).mkdir(parents=True, exist_ok=True)
+    logger = SummaryWriter(log_dir=tb_path)
 
     # if(torch.hub.set_dir()):
     #     print(2)
@@ -162,7 +171,7 @@ def main(args):
                                   weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-    dataset_train = build_dataset(image_set='train', args=args)
+    dataset_train = build_dataset(image_set='val', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
 
     if args.distributed:
@@ -215,12 +224,18 @@ def main(args):
         return
 
     print("Start training")
+
+    orig_model = copy.deepcopy(model)
+    orig_model.eval()
+
+    copied_matcher = copy.deepcopy(criterion.matcher)
+
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
-            model, criterion, postprocessors, data_loader_train, optimizer, device, epoch,
+            model, criterion, postprocessors, data_loader_train, optimizer, device, epoch, orig_model, copied_matcher,
             args.clip_max_norm, args.output_dir, logger)
         lr_scheduler.step()
         if args.output_dir:
@@ -237,31 +252,31 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
+        if epoch > 0 and epoch % args.eval_every == 0:
+            test_stats, coco_evaluator = evaluate(
+                model, criterion, postprocessors, data_loader_val, base_ds, device, epoch,orig_model, copied_matcher, args.output_dir, logger,
+            )
 
-        test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, epoch, args.output_dir, logger
-        )
+            log_stats = {
+                **{f'train_{k}': v for k, v in train_stats.items()},
+                         **{f'test_{k}': v for k, v in test_stats.items()},
+                         'epoch': epoch,
+                         'n_parameters': n_parameters}
 
-        log_stats = {
-            **{f'train_{k}': v for k, v in train_stats.items()},
-                     **{f'test_{k}': v for k, v in test_stats.items()},
-                     'epoch': epoch,
-                     'n_parameters': n_parameters}
+            if args.output_dir and utils.is_main_process():
+                with (output_dir / "log.txt").open("a") as f:
+                    f.write(json.dumps(log_stats) + "\n")
 
-        if args.output_dir and utils.is_main_process():
-            with (output_dir / "log.txt").open("a") as f:
-                f.write(json.dumps(log_stats) + "\n")
-
-            #for evaluation logs
-            if coco_evaluator is not None:
-                (output_dir / 'eval').mkdir(exist_ok=True)
-                if "bbox" in coco_evaluator.coco_eval:
-                    filenames = ['latest.pth']
-                    if epoch % 50 == 0:
-                        filenames.append(f'{epoch:03}.pth')
-                    for name in filenames:
-                        torch.save(coco_evaluator.coco_eval["bbox"].eval,
-                                   output_dir / "eval" / name)
+                #for evaluation logs
+                if coco_evaluator is not None:
+                    (output_dir / 'eval').mkdir(exist_ok=True)
+                    if "bbox" in coco_evaluator.coco_eval:
+                        filenames = ['latest.pth']
+                        if epoch % 50 == 0:
+                            filenames.append(f'{epoch:03}.pth')
+                        for name in filenames:
+                            torch.save(coco_evaluator.coco_eval["bbox"].eval,
+                                       output_dir / "eval" / name)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

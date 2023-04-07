@@ -37,7 +37,6 @@ def rescale_bboxes(out_bbox, size):
 
 def plot_results(fig,pil_img, p, box, idx, title=''):
     ax1 = fig.add_subplot(3, 2, idx)
-    ax1.title.set_text(title)
     plt.imshow(pil_img.astype(np.uint32))
     ax = plt.gca()
     colors = COLORS * 100
@@ -63,12 +62,16 @@ def plot_results(fig,pil_img, p, box, idx, title=''):
         pres = 10
         ind = int(cl.item())
 
-    text = f'{CLASSES[ind]}: {pres:0.2f}'
+    try:
+        text = f'{CLASSES[ind]}: {pres:0.2f}'
+    except BaseException:
+        text = f'NO OBJ: {pres:0.2f}'
 
+    ax1.title.set_text(f"{title} {text}")
 
-    ax.text(xmin, ymin, text, fontsize=8,
-            bbox=dict(facecolor='yellow', alpha=0.3)
-            )
+    # ax.text(xmin, ymin, text, fontsize=8,
+    #         bbox=dict(facecolor='yellow', alpha=0.3)
+    #         )
 
     plt.axis('off')
     # plt.show()
@@ -103,6 +106,8 @@ class MaskGenerator:
         self.h = None
         self.w = None
         self.weight_coef = weight_coef
+
+        self.src_idx = None
 
         # for debugging purpose, only value
         self.relevance = None
@@ -291,6 +296,11 @@ class MaskGenerator:
         target_labels = [targets[im]["labels"][ind].float().cpu().unsqueeze(0) for im, ind in
                          zip(tgt_idx[0], tgt_idx[1])]
         target_labels = torch.cat(target_labels)
+
+        # target_labels_vis = [targets[im]["labels_vis"][ind].float().cpu().unsqueeze(0) for im, ind in
+        #                  zip(tgt_idx[0], tgt_idx[1])]
+        # target_labels_vis = torch.cat(target_labels_vis)
+
         pred_probs = [outputs["pred_logits"][im][ind].float().cpu().unsqueeze(0) for im, ind in zip(idx[0], idx[1])]
         pred_probs = torch.cat(pred_probs)
 
@@ -298,6 +308,7 @@ class MaskGenerator:
         mask_generator.set_tar_boxes(target_boxes)
         mask_generator.set_probs(pred_probs)
         mask_generator.set_labels(target_labels)
+        mask_generator.set_src_idx(idx)
         mask_generator.set_query_ids(idx[1])
 
         cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w, use_lrp=False)
@@ -338,15 +349,21 @@ class MaskGenerator:
     def get_labels(self):
         return self.tar_labels
 
+    def set_src_idx(self,labels):
+        self.src_idx = labels
+
+    def get_src_idx(self):
+        return self.src_idx
+
 
     def set_boxes(self, pred_boxes):
-        self.pred_boxes = pred_boxes.detach().cpu()
+        self.pred_boxes = pred_boxes.detach()
 
     def get_boxes(self):
         return self.pred_boxes
 
     def set_tar_boxes(self, boxes):
-        self.tar_boxes = boxes.detach().cpu()
+        self.tar_boxes = boxes.detach()
 
     def get_tar_boxes(self):
         return self.tar_boxes
@@ -362,13 +379,13 @@ class MaskGenerator:
         return self.target_masks
 
     def set_probs(self, probs):
-        self.probs = probs
+        self.probs = probs.detach()
 
     def get_probs(self):
         return self.probs
 
     def set_query_ids(self, query_ids):
-        self.query_ids = query_ids
+        self.query_ids = query_ids.detach()
 
     def get_query_ids(self):
         return self.query_ids
