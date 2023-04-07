@@ -70,7 +70,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     #         pass
 
     count = 0
-    save_interval = 1
+    save_interval = 100
     memory_interval = 100
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
@@ -400,7 +400,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
 
             panoptic_evaluator.update(res_pano)
         post_process_seg = PostProcessSegmOne()
-        save_interval = 1000
+        save_interval = 100
         memory_interval = 5
 
 
