@@ -441,7 +441,7 @@ def init_distributed_mode(args):
                                          world_size=args.world_size, rank=args.rank)
     print(f"Process group init ranj {args.rank}")
     torch.distributed.barrier()
-    setup_for_distributed(args.rank == 0)
+    # setup_for_distributed(args.rank == 0)
     print(f"Process  init done {args.rank}")
 
 
