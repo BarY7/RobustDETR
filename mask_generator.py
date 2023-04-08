@@ -99,13 +99,14 @@ COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
           [0.494, 0.184, 0.556], [0.466, 0.674, 0.188], [0.301, 0.745, 0.933]]
 
 class MaskGenerator:
-    def __init__(self, model, weight_coef):
+    def __init__(self, model, weight_coef, dist=False):
         self.gen = Generator(model)
         # self.abl = GeneratorAlbationNoAgg(model)
         self.model = model
         self.h = None
         self.w = None
         self.weight_coef = weight_coef
+        self.dist = dist
 
         self.src_idx = None
 
