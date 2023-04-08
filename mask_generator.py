@@ -156,7 +156,7 @@ class MaskGenerator:
             )
         ]
 
-        model_no_ddp(samples)
+        outputs = model_no_ddp(samples)
 
         for hook in hooks:
             hook.remove()
