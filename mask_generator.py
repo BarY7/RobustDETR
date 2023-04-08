@@ -105,7 +105,7 @@ class MaskGenerator:
             self.model = model.module
         else:
             self.model = model
-        self.gen = Generator(model)
+        self.gen = Generator(self.model)
         self.h = None
         self.w = None
         self.weight_coef = weight_coef
