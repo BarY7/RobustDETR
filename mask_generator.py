@@ -156,7 +156,7 @@ class MaskGenerator:
             )
         ]
 
-        self.model(samples)
+        outputs = self.model(samples)
 
         for hook in hooks:
             hook.remove()
