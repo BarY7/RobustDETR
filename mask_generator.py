@@ -143,17 +143,20 @@ class MaskGenerator:
 
         # use lists to store the outputs via up-values
         vis_shape, target_shape = [], []
-
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            model_no_ddp = self.model.module
+        else:
+            model_no_ddp = self.model
         hooks = [
-            self.model.transformer.register_forward_hook(
+            model_no_ddp.transformer.register_forward_hook(
                 lambda self, input, output: vis_shape.append(output[1])
             ),
-            self.model.backbone[-2].register_forward_hook(
+            model_no_ddp.backbone[-2].register_forward_hook(
                 lambda self, input, output: target_shape.append(output)
             )
         ]
 
-        outputs = self.model(samples)
+        model_no_ddp(samples)
 
         for hook in hooks:
             hook.remove()
