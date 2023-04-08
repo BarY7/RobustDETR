@@ -100,12 +100,12 @@ COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
 
 class MaskGenerator:
     def __init__(self, model, weight_coef, dist=False):
-        self.gen = Generator(model)
         # self.abl = GeneratorAlbationNoAgg(model)
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             self.model = model.module
         else:
             self.model = model
+        self.gen = Generator(model)
         self.h = None
         self.w = None
         self.weight_coef = weight_coef
