@@ -102,7 +102,7 @@ class MaskGenerator:
     def __init__(self, model, weight_coef, dist=False):
         self.gen = Generator(model)
         # self.abl = GeneratorAlbationNoAgg(model)
-        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             self.model = model.module
         else:
             self.model = model
