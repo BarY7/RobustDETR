@@ -341,7 +341,7 @@ class Generator:
 
         agg_list = []
 
-        l = 0
+        # l = 0
 
         for img_idx, mask_idx, tgt_img_idx, tgt_mask_idx in zip(batch_target_idx[0],batch_target_idx[1], tgt_idx[0], tgt_idx[1]):
             # print(torch.cuda.memory_summary())
@@ -350,7 +350,7 @@ class Generator:
             one_hot = torch.zeros_like(outputs_logits).to(outputs_logits.device)
             one_hot[img_idx, mask_idx, index] = 1
             # one_hot[batch_target_idx[0][0], batch_target_idx[1][0], index] = 1
-            one_hot_vector = one_hot
+            # one_hot_vector = one_hot
             one_hot.requires_grad_(True)
             one_hot = torch.sum(one_hot.cuda() * outputs_logits)
 
@@ -404,14 +404,18 @@ class Generator:
             # del self.R_q_i
 
             cam = self.norm_rel_maps(aggregated)
-            l = l + compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
+            l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
             l = l * mask_generator.get_weight_coef()
             # print(torch.cuda.memory_summary())
             if mask_generator.is_train_mode():
                 l.backward(retain_graph=True)
+                # print(torch.cuda.memory_summary())
             agg_list.append(torch.tensor(l.detach().item()))
             del l
-            l = 0
+            del aggregated
+            del self.R_q_i
+            del self.R_i_i
+            del self.R_q_q
 
             # loss_batch_count += 1
             # if loss_batch_count == 3 :
@@ -430,7 +434,6 @@ class Generator:
         #     agg_list.append(torch.tensor(l.detach().item()))
         #     l = 0
         # print(l)
-        del l
 
 
         return torch.tensor(agg_list).to(device).sum()
