@@ -117,9 +117,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # poision!
             for o_img_i, l in enumerate(orig_indices):
                 print("box shape : ")
-                print(targets["boxes"].shape)
+                print(targets[0]["boxes"].shape)
                 print("sampm shape : ")
-                print(targets["boxes"].shape)
                 targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
                 targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
                 for o_i,t_i in zip(*l):
