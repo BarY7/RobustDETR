@@ -73,139 +73,152 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     save_interval = 100
     memory_interval = 100
 
+
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
+        try:
+            samples = samples.to(device)
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        samples = samples.to(device)
-        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+            if count % memory_interval == 0:
+                print(torch.cuda.memory_summary(device=None, abbreviated=False))
+                # torch.cuda.empty_cache()
 
-        if count % memory_interval == 0:
-            print(torch.cuda.memory_summary(device=None, abbreviated=False))
+            mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
+
+
+            batch_size = len(samples.tensors)
+
+            # outputs = model(samples)
+
+            # update in mask generator so rel maps loss can access this
+            outputs = mask_generator.forward_and_update_feature_map_size(samples)
+
+
+            orig_output = orig_model(samples)
+            orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
+
+            orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
+            # Retrieve the matching between the outputs of the last layer and the targets
+            orig_indices = copied_matcher(orig_outputs_without_aux, targets)
+
+            orig_src_idx = get_src_permutation_idx(orig_indices)
+
+            just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1] # b x 100
+            #for vis we dont want no objects
+            just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
+
+            # if(epoch%2 == 0):
+            #     print(5)
+            # else:
+            # poision!
+            for o_img_i, l in enumerate(orig_indices):
+                targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
+                targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
+                for o_i,t_i in zip(*l):
+                    targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
+                    # for the real labels we don't want no obj
+                    targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+                    targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+
+
+
+            # orig_boxes = orig_output['pred_boxes'][orig_src_idx]
+            #
+            # # POISION TARGETS
+            # for i,b in zip(orig_boxes[0],orig_boxes[1]):
+            #     targets[i]['boxes']
+            # [ for i,t in enumerate(targets)]
+
+            # SET_FEATURE_MAP_SIZE = True
+
+            # masks_amount = outputs['pred_logits'].shape[1]
+
+            # h, w = mask_generator.update_feature_map_size(outputs, samples)
+
+            # x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
+            # masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(get_one_output_from_batch(outputs, i), utils.NestedTensor(*samples.decompose_single_item(i)), targets[i], method) for i in range(batch_size)])
+
+            # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
+            #                                                                           torch.tensor([mask_idx])) for mask_idx
+            #                         in range((masks_amount))]) for i in range(batch_size)]
+            # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
+
+            # outputs["pred_masks"] = new_masks
+
+            # # reshape masks
+            # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+            # results = postprocessors['bbox'](feature_map_relevancy, orig_target_sizes)
+            # # if 'segm' in postprocessors.keys():
+            # postprocessors['segm'] = PostProcessSegm()
+            # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+            # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
+
+            # important because loss updates the gradient
+            optimizer.zero_grad()
+            loss_dict = criterion(outputs, targets, mask_generator)
+            weight_dict = criterion.weight_dict # verify required grad is false
+            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+
+            # reduce losses over all GPUs for logging purposes
+            loss_dict_reduced = utils.reduce_dict(loss_dict)
+            loss_dict_reduced_unscaled = {f'{k}_unscaled': v
+                                          for k, v in loss_dict_reduced.items()}
+            loss_dict_reduced_scaled = {k: v * weight_dict[k]
+                                        for k, v in loss_dict_reduced.items() if k in weight_dict}
+            losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
+
+            loss_value = losses_reduced_scaled.item()
+
+            if not math.isfinite(loss_value):
+                print("Loss is {}, stopping training".format(loss_value))
+                print(loss_dict_reduced)
+                sys.exit(1)
+
+            # we zero grad earlier - each ,ask accumaltes gradient so we can't use it here.
+            # optimizer.zero_grad()
+
+            losses.backward()
+            if max_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+            optimizer.step()
+
+            metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
+            metric_logger.update(class_error=0)
+            metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+            metric_logger.write_to_tb(logger, "train", (epoch * len_set) + count - 1)
+
+            # # debugging output
+
+            # debugging output
+            if count % save_interval == 0:
+                if output_dir:
+                    # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
+                    vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "train")
+
+            del outputs
+            del samples
+            del targets
+            del losses
+            # del mask_generator.gen.R_i_i
+            # del mask_generator.gen.R_q_i
+            # del mask_generator.gen.R_q_q
+            del mask_generator.gen
+            del mask_generator
             # torch.cuda.empty_cache()
+        except BaseException as err:
+            sys.stderr.write("\n")
+            sys.stderr.write(f"Error found in iter {count} epoch {epoch}\n")
+            checkpoint_path = f'{output_dir}/ checkpoint_fail{epoch:04}.pth'
+            utils.save_on_master({
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch,
+            }, checkpoint_path)
 
-        mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
+            raise err
 
-
-        batch_size = len(samples.tensors)
-
-        # outputs = model(samples)
-
-        # update in mask generator so rel maps loss can access this
-        outputs = mask_generator.forward_and_update_feature_map_size(samples)
-
-
-        orig_output = orig_model(samples)
-        orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
-
-        orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
-        # Retrieve the matching between the outputs of the last layer and the targets
-        orig_indices = copied_matcher(orig_outputs_without_aux, targets)
-
-        orig_src_idx = get_src_permutation_idx(orig_indices)
-
-        just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1] # b x 100
-        #for vis we dont want no objects
-        just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
-
-        # if(epoch%2 == 0):
-        #     print(5)
-        # else:
-        # poision!
-        for o_img_i, l in enumerate(orig_indices):
-            targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
-            targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
-            for o_i,t_i in zip(*l):
-                targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
-                # for the real labels we don't want no obj
-                targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-                targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-
-
-
-        # orig_boxes = orig_output['pred_boxes'][orig_src_idx]
-        #
-        # # POISION TARGETS
-        # for i,b in zip(orig_boxes[0],orig_boxes[1]):
-        #     targets[i]['boxes']
-        # [ for i,t in enumerate(targets)]
-
-        # SET_FEATURE_MAP_SIZE = True
-
-        # masks_amount = outputs['pred_logits'].shape[1]
-
-        # h, w = mask_generator.update_feature_map_size(outputs, samples)
-
-        # x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
-        # masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(get_one_output_from_batch(outputs, i), utils.NestedTensor(*samples.decompose_single_item(i)), targets[i], method) for i in range(batch_size)])
-
-        # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
-        #                                                                           torch.tensor([mask_idx])) for mask_idx
-        #                         in range((masks_amount))]) for i in range(batch_size)]
-        # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
-
-        # outputs["pred_masks"] = new_masks
-
-        # # reshape masks
-        # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-        # results = postprocessors['bbox'](feature_map_relevancy, orig_target_sizes)
-        # # if 'segm' in postprocessors.keys():
-        # postprocessors['segm'] = PostProcessSegm()
-        # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-        # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
-
-        # important because loss updates the gradient
-        optimizer.zero_grad()
-        loss_dict = criterion(outputs, targets, mask_generator)
-        weight_dict = criterion.weight_dict # verify required grad is false
-        losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
-
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = utils.reduce_dict(loss_dict)
-        loss_dict_reduced_unscaled = {f'{k}_unscaled': v
-                                      for k, v in loss_dict_reduced.items()}
-        loss_dict_reduced_scaled = {k: v * weight_dict[k]
-                                    for k, v in loss_dict_reduced.items() if k in weight_dict}
-        losses_reduced_scaled = sum(loss_dict_reduced_scaled.values())
-
-        loss_value = losses_reduced_scaled.item()
-
-        if not math.isfinite(loss_value):
-            print("Loss is {}, stopping training".format(loss_value))
-            print(loss_dict_reduced)
-            sys.exit(1)
-
-        # we zero grad earlier - each ,ask accumaltes gradient so we can't use it here.
-        # optimizer.zero_grad()
-
-        losses.backward()
-        if max_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
-        optimizer.step()
-
-        metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
-        metric_logger.update(class_error=0)
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
-        metric_logger.write_to_tb(logger, "train", (epoch * len_set) + count - 1)
-
-        # # debugging output
-
-        # debugging output
-        if count % save_interval == 0:
-            if output_dir:
-                # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
-                vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "train")
-
-        del outputs
-        del samples
-        del targets
-        del losses
-        # del mask_generator.gen.R_i_i
-        # del mask_generator.gen.R_q_i
-        # del mask_generator.gen.R_q_q
-        del mask_generator.gen
-        del mask_generator
-        # torch.cuda.empty_cache()
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -326,6 +339,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
         # print(torch.cuda.memory_summary())
 
         count += 1
+
         mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
 
         samples = samples.to(device)
@@ -555,7 +569,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             plt.show()
 
         # bear_vis()
-        
+
         # debugging output
         if count % save_interval == 0:
             vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "test")
@@ -564,9 +578,9 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
         # torch.cuda.memory_summary(device=None, abbreviated=False)
         # torch.cuda.empty_cache()
 
-    masks_rel_loss_fig = plt.figure(figsize=(16, 10))
-    plt.scatter(num_mask_list, rel_loss_list)
-    logger.add_figure('Masks num (x) , Loss (y)', masks_rel_loss_fig, 0)
+    # masks_rel_loss_fig = plt.figure(figsize=(16, 10))
+    # plt.scatter(num_mask_list, rel_loss_list)
+    # logger.add_figure('Masks num (x) , Loss (y)', masks_rel_loss_fig, 0)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

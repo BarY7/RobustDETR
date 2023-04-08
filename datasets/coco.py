@@ -17,7 +17,9 @@ import datasets.transforms as T
 class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks, limit = None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
-        # self.ids = self.ids[39:39+limit]
+        if limit > 0:
+            self.ids = self.ids[: limit]
+
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
 
@@ -122,7 +124,13 @@ def make_coco_transforms(image_set):
 
     scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
 
+
+
     if image_set == 'train':
+        return T.Compose([
+            T.RandomResize([800], max_size=1333),
+            normalize,
+        ])
         return T.Compose([
             T.RandomHorizontalFlip(),
             T.RandomSelect(
