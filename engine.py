@@ -32,6 +32,7 @@ from torch import nn
 import matplotlib.pyplot as plt
 
 from modules.modules.explainer import get_image_with_relevance, show_cam_on_image
+from util import misc
 from util.model_output_utils import otsu_thresh
 
 
@@ -82,6 +83,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
 
+        print(f"I AM NUMBER {misc.get_rank()}")
         try:
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -197,7 +199,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # we zero grad earlier - each ,ask accumaltes gradient so we can't use it here.
             # optimizer.zero_grad()
 
-            print("Printing grads before sync - should be different.")
+            print(f"Printing grads before sync - should be different. process {misc.get_rank()}")
             print(model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
             losses.backward()
             # grads shuold be equal on all processes
