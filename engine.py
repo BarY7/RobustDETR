@@ -73,15 +73,18 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     save_interval = 100
     memory_interval = 100
 
-
+    print(torch.cuda.memory_summary())
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
+
         try:
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-            if count % memory_interval == 0:
-                print(torch.cuda.memory_summary(device=None, abbreviated=False))
+            # if count % memory_interval == 0:
+            print(f"SAMPLES SHAPEEEEEEEEEEEEEEEE {samples.tensors.shape}")
+            print(torch.cuda.memory_summary(device=None, abbreviated=False))
+
                 # torch.cuda.empty_cache()
 
             mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
@@ -113,6 +116,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # else:
             # poision!
             for o_img_i, l in enumerate(orig_indices):
+                print("box shape : ")
+                print(targets["boxes"].shape)
+                print("sampm shape : ")
+                print(targets["boxes"].shape)
                 targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
                 targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
                 for o_i,t_i in zip(*l):

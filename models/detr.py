@@ -267,8 +267,8 @@ class SetCriterion(nn.Module):
         h, w = mask_generator.h, mask_generator.w
 
         print(f"idx {idx}")
-        print(f"{targets[0]}")
-
+        print(f"{len(targets)}")
+        print(outputs["pred_logits"].shape)
         if(idx[0].shape[0] == 0):
             loss = torch.tensor(0).to(outputs["pred_logits"].device)
 
