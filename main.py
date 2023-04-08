@@ -122,11 +122,11 @@ def get_args_parser():
 
 
 def main(args):
-    # utils.init_distributed_mode(args)
+    utils.init_distributed_mode(args)
 
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
-    args.distributed = False
+    # args.distributed = False
     print("git:\n  {}\n".format(utils.get_sha()))
 
     if args.frozen_weights is not None:
