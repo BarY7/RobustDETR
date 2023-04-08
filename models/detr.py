@@ -266,8 +266,11 @@ class SetCriterion(nn.Module):
         # get src masks from outputs, just for the 'true' masks
         h, w = mask_generator.h, mask_generator.w
 
+        print(f"idx shape {idx.shape}")
+        print(f"{targets[0]}")
+
         if(idx[0].shape[0] == 0):
-            loss = torch.tensor(0)
+            loss = torch.tensor(0).to(outputs["pred_logits"].device)
 
         else:
             # bugged for no masks
