@@ -24,7 +24,7 @@ from sys import platform
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
-    parser.add_argument('--lr', default=3e-5, type=float)
+    parser.add_argument('--lr', default=1e-5, type=float)
     parser.add_argument('--lr_backbone', default=0, type=float)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--weight_decay', default=1e-4, type=float)
@@ -44,8 +44,8 @@ def get_args_parser():
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 
-    parser.add_argument('--img_limit', type=int)
-    parser.add_argument('--img_limit_eval', type=int)
+    parser.add_argument('--img_limit', type=int, default=0)
+    parser.add_argument('--img_limit_eval', type=int, default=0)
     parser.add_argument(('--eval_every'), default=5, type=int)
 
     # * Transformer
