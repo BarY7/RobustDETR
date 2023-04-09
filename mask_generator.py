@@ -158,7 +158,7 @@ class MaskGenerator:
         ]
 
         if(self.model_ddp is not None):
-            outputs = self.model_ddp(outputs)
+            outputs = self.model_ddp(samples)
         else:
             outputs = self.model(samples)
 
