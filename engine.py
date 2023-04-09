@@ -215,8 +215,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
             metric_logger.update(class_error=0)
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-
-            metric_logger.write_to_tb(logger, "train", (epoch * len_set) + count - 1)
+            if utils.is_main_process():
+                metric_logger.write_to_tb(logger, "train", (epoch * len_set) + count - 1)
 
             # # debugging output
 
@@ -253,8 +253,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
     ret_dict = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-    for key, val in ret_dict.items():
-        logger.add_scalar(f"avg_{key}", val, epoch)
+    if utils.is_main_process():
+        for key, val in ret_dict.items():
+            logger.add_scalar(f"avg_{key}", val, epoch)
     return ret_dict
 
 

@@ -26,6 +26,8 @@ if version.parse(torchvision.__version__) < version.parse('0.7'):
     from torchvision.ops.misc import _output_size
 
 
+import util.misc as utils
+
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -189,6 +191,8 @@ class MetricLogger(object):
         return self.delimiter.join(loss_str)
 
     def write_to_tb(self, logger: SummaryWriter,stage, step):
+        if misc.x == 5:
+            print(2)
         for name, meter in self.meters.items():
             logger.add_scalar(f'{stage}_{name}', meter.value , step)
 
