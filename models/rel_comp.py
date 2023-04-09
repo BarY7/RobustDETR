@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch import nn
 from typing import Dict
 
-from util import box_ops, model_output_utils
+from util import box_ops, model_output_utils, misc
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
@@ -88,6 +88,9 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     # pred_probs = torch.cat(pred_probs)
     # loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
     #                      zip(pred_masks, target_masks)]).sum() / num_boxes
+
+    print(f"Printing pred masks - process {misc.get_rank()}")
+    print(pred_masks)
 
     loss = compute_relevance_loss(pred_masks, target_masks)
     # del loss

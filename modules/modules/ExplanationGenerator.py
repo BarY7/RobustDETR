@@ -3,6 +3,7 @@ import torch
 from torch.nn.functional import softmax
 
 from models.rel_comp import compute_rel_loss_from_map
+from util import misc
 
 
 def compute_rollout_attention(all_layer_matrices, start_layer=0):
@@ -403,12 +404,30 @@ class Generator:
             # del self.R_q_q
             # del self.R_q_i
 
+            print(f"Printing AGGREGATED values before norm - process {misc.get_rank()}")
+            print(aggregated)
+
             cam = self.norm_rel_maps(aggregated)
+            print(f"Printing CAM values after norm - process {misc.get_rank()}")
+            print(cam)
+
             l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
+
+            print(f"Printing LOSS values after norm - img idx{img_idx} mask idx {mask_idx} process {misc.get_rank()}")
+            print(l)
+
             l = l * mask_generator.get_weight_coef()
+
+            print(f"Printing LOSS values after multiply - img idx{img_idx} mask idx {mask_idx} process {misc.get_rank()}")
+            print(l)
+
             # print(torch.cuda.memory_summary())
             if mask_generator.is_train_mode():
+                print(f"Printing GRAD values before backprop  - process {misc.get_rank()}")
+                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 l.backward(retain_graph=True)
+                print(f"Printing GRAD values after backprop - process {misc.get_rank()}")
+                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 # print(torch.cuda.memory_summary())
             agg_list.append(torch.tensor(l.detach().item()))
             del l

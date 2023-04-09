@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 from typing import Dict
 
-from util import box_ops, model_output_utils
+from util import box_ops, model_output_utils, misc
 from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
@@ -266,8 +266,8 @@ class SetCriterion(nn.Module):
         # get src masks from outputs, just for the 'true' masks
         h, w = mask_generator.h, mask_generator.w
 
-        print(f"idx {idx}")
-        print(f"{len(targets)}")
+        print(f"idx {idx} - {misc.get_rank()}")
+        print(f"{len(targets)} - {misc.get_rank()}")
         print(outputs["pred_logits"].shape)
         if(idx[0].shape[0] == 0):
             loss = torch.tensor(0).to(outputs["pred_logits"].device)

@@ -84,6 +84,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         count += 1
 
         print(f"I AM NUMBER {misc.get_rank()}")
+        print(f"Printing img id info! pro {misc.get_rank()}")
+        print(f'targets[0]["image_id"] pro {misc.get_rank()} ')
+        print(f'targets[0]["boxes"] pro {misc.get_rank()} ')
+
         try:
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -174,7 +178,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
                 # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
                 # important because loss updates the gradient
+                print(f"Printing grads before zero grad! {misc.get_rank()}")
+                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 optimizer.zero_grad()
+
+                print(f"Printing grads after zero grad! {misc.get_rank()}")
+                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+
                 loss_dict = criterion(outputs, targets, mask_generator)
 
             # out of no sync
