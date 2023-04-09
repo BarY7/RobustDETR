@@ -164,7 +164,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
             # important because loss updates the gradient
 
-            prev_model = copy.deepcopy(model)
+            # prev_model = copy.deepcopy(model)
 
             optimizer.zero_grad()
             loss_dict = criterion(outputs, targets, mask_generator)
@@ -224,18 +224,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             sys.stderr.write("\n")
             sys.stderr.write(f"Error found in iter {count} epoch {epoch}\n")
             checkpoint_path = f'{output_dir}/checkpoint_fail{epoch:04}_{count}.pth'
-            checkpoint_path_prev = f'{output_dir}/checkpoint_fail{epoch:04}_{count}_prev.pth'
             utils.save_on_master({
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
             }, checkpoint_path)
-
-            utils.save_on_master({
-                'model': prev_model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'epoch': epoch,
-            }, checkpoint_path_prev)
 
             raise err
 
