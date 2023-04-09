@@ -114,6 +114,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             with cm:
                 outputs = mask_generator.forward_and_update_feature_map_size(samples)
 
+                print(f"output!!!!!! {outputs}")
 
                 orig_output = orig_model(samples)
                 orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
@@ -249,9 +250,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         except BaseException as err:
             sys.stderr.write("\n")
             sys.stderr.write(f"Error found in iter {count} epoch {epoch}\n")
-            checkpoint_path = f'{output_dir}/ checkpoint_fail{epoch:04}.pth'
+            checkpoint_path = f'{output_dir}/checkpoint_fail{epoch:04}_{count}.pth'
             utils.save_on_master({
-                'model': model.state_dict(),
+                'model': model.module.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
             }, checkpoint_path)
