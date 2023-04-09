@@ -34,6 +34,9 @@ def apply_self_attention_rules(R_ss, R_sq, cam_ss):
 
 # rule 10 from paper
 def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply_self_in_rule_10=True):
+    print(f"R_ss {R_ss}")
+    print(f"R_qq {R_qq}")
+    print(f"cam_sq {cam_sq}")
     R_ss_normalized = R_ss
     R_qq_normalized = R_qq
     if apply_normalization:
@@ -42,6 +45,11 @@ def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply
     R_sq_addition = torch.matmul(R_ss_normalized.t(), torch.matmul(cam_sq, R_qq_normalized))
     if not apply_self_in_rule_10:
         R_sq_addition = cam_sq
+    if torch.isnan(R_sq_addition).any():
+        print("GOT NAN, printing R_sq_addition")
+        print(R_sq_addition)
+        print ("saving transformer module as old_module.pth")
+        raise "NAN error, saving current model"
     R_sq_addition[torch.isnan(R_sq_addition)] = 0
     return R_sq_addition
 
@@ -391,9 +399,9 @@ class Generator:
 
             aggregated = aggregated[mask_idx].unsqueeze(0).unsqueeze(0)
 
-            print(
-                f"Printing AGG of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-            print(aggregated)
+            # print(
+            #     f"Printing AGG of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+            # print(aggregated)
 
             # agg_list.append(aggregated)
             # requires_grad = False
@@ -409,24 +417,24 @@ class Generator:
 
             cam = self.norm_rel_maps(aggregated)
 
-            print(
-                f"Printing CAM AFTER NORM of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-            print(cam)
+            # print(
+            #     f"Printing CAM AFTER NORM of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+            # print(cam)
 
             l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
-
-            print(
-                f"Printing LOSS AFTER COMPUTE of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-            print(l)
+            #
+            # print(
+            #     f"Printing LOSS AFTER COMPUTE of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+            # print(l)
 
             l = l * mask_generator.get_weight_coef()
             # print(torch.cuda.memory_summary())
             if mask_generator.is_train_mode():
-                print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-                print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+                # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 l.backward(retain_graph=True)
-                print(f"Printing grads AFTER backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-                print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                # print(f"Printing grads AFTER backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+                # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
 
                 # if(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad )
                 # print(torch.cuda.memory_summary())
