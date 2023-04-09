@@ -40,6 +40,9 @@ def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply
     if apply_normalization:
         R_ss_normalized = handle_residual(R_ss)
         R_qq_normalized = handle_residual(R_qq)
+        print(f"R_ss_norm {R_ss_normalized}")
+        print(f"R_qq_norm {R_qq_normalized}")
+
     R_sq_addition = torch.matmul(R_ss_normalized.t(), torch.matmul(cam_sq, R_qq_normalized))
     if not apply_self_in_rule_10:
         R_sq_addition = cam_sq
