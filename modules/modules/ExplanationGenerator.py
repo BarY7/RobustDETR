@@ -393,7 +393,7 @@ class Generator:
 
             print(
                 f"Printing AGG of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-            print(cam)
+            print(aggregated)
 
             # agg_list.append(aggregated)
             # requires_grad = False
