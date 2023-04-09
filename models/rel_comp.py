@@ -10,7 +10,7 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
 from util.model_output_utils import normalize_rel_maps
 
 from .backbone import build_backbone
-from .matcher import build_matcher
+# from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegmRelMaps,
                            dice_loss, sigmoid_focal_loss, PostProcessSegm)
 from .transformer import build_transformer
@@ -32,16 +32,22 @@ def compute_bg_loss( relevance_map, target_seg, mse_critertion):
     return bg_mse
 
 
-def compute_relevance_loss( outputs, targets):
+def compute_relevance_loss(outputs_rel, targets_masks):
     mse_criterion = torch.nn.MSELoss(reduction='mean')
     lamda_fg = 0.4
     lamga_bg = 2
-    outputs = outputs.cuda()
-    fg_loss = compute_fg_loss(outputs, targets, mse_criterion)
-    bg_loss = compute_bg_loss(outputs, targets, mse_criterion)
+    outputs_rel = outputs_rel.cuda()
+    fg_loss = compute_fg_loss(outputs_rel, targets_masks, mse_criterion)
+    bg_loss = compute_bg_loss(outputs_rel, targets_masks, mse_criterion)
     relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
     return relevance_loss
 
+
+def interpolate_and_resize(src_masks, target_masks):
+    src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
+                            mode="bilinear", align_corners=False)
+    src_masks = normalize_rel_maps(src_masks)
+    return src_masks
 def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets, tgt_idx, w, tgt_img_num, tgt_mask_idx):
     src_masks = torch.reshape(src_masks, [src_masks.shape[0], src_masks.shape[1], h, w], )
     # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(outputs,

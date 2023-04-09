@@ -6,7 +6,9 @@ import torch
 from scipy.optimize import linear_sum_assignment
 from torch import nn
 
+from models.rel_comp import compute_relevance_loss, interpolate_and_resize
 from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+from util.misc import nested_tensor_from_tensor_list
 
 
 class HungarianMatcher(nn.Module):
@@ -17,7 +19,7 @@ class HungarianMatcher(nn.Module):
     while the others are un-matched (and thus treated as non-objects).
     """
 
-    def __init__(self, cost_class: float = 1, cost_bbox: float = 1, cost_giou: float = 1):
+    def __init__(self, cost_class: float = 1, cost_bbox: float = 1, cost_giou: float = 1, cost_rel = 0):
         """Creates the matcher
 
         Params:
@@ -29,7 +31,8 @@ class HungarianMatcher(nn.Module):
         self.cost_class = cost_class
         self.cost_bbox = cost_bbox
         self.cost_giou = cost_giou
-        assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0, "all costs cant be 0"
+        self.cost_rel_coeff = cost_rel
+        assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0 or cost_rel != 0, "all costs cant be 0"
 
     @torch.no_grad()
     def forward(self, outputs, targets):
@@ -73,8 +76,26 @@ class HungarianMatcher(nn.Module):
         # Compute the giou cost betwen boxes
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
 
+        if (self.cost_rel_coeff > 0):
+            tgt_masks = torch.cat([v["masks"] for v in targets])
+            # target_masks, valid = nested_tensor_from_tensor_list(tgt_masks).decompose()   # not needed on BS=1
+            pred_rel = outputs["pred_rel_maps"].flatten(0,1)
+            out_prob = outputs["pred_logits"].flatten(0, 1).max
+            init_rel = torch.zeros(pred_rel.shape[0], tgt_masks.shape[0]).to(tgt_masks.device)
+            for i in range(pred_rel.shape[0]):
+                for j in range(tgt_masks.shape[0]):
+                    cur_rel = pred_rel[i]
+                    # target_masks = target_masks.to(src_masks)
+                    # upsample predictions to the target size
+                    src_masks = interpolate_and_resize(cur_rel.unsqueeze(0), tgt_masks)
+                    init_rel[i][j] = compute_relevance_loss(src_masks.squeeze(0).squeeze(0), tgt_masks[j])
+            cost_rel = init_rel
+        else:
+            cost_rel = 0
+
+
         # Final cost matrix
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou + self.cost_rel_coeff * cost_rel
         C = C.view(bs, num_queries, -1).cpu()
 
         sizes = [len(v["boxes"]) for v in targets]
@@ -83,4 +104,5 @@ class HungarianMatcher(nn.Module):
 
 
 def build_matcher(args):
-    return HungarianMatcher(cost_class=args.set_cost_class, cost_bbox=args.set_cost_bbox, cost_giou=args.set_cost_giou)
+    return HungarianMatcher(cost_class=args.set_cost_class, cost_bbox=args.set_cost_bbox, cost_giou=args.set_cost_giou,
+                            cost_rel=args.set_cost_rel)

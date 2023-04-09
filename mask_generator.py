@@ -279,6 +279,9 @@ class MaskGenerator:
         return masks
 
 
+    def compute_norm_rel_map_with_gen_spaghetti(self, batch_size, img_idx, mask_idx, outputs_logits,index = None):
+        return self.gen.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx, outputs_logits,index = None)
+
     # Get the explanations
     def get_panoptic_masks_no_thresholding(self, outputs_single_item, idx):
         cam = self.gen.generate_ours_from_outputs(outputs_single_item, idx, use_lrp=False)
@@ -311,6 +314,7 @@ class MaskGenerator:
         mask_generator.set_src_idx(idx)
         mask_generator.set_query_ids(idx[1])
 
+        #SPAGEHTTI, self is acutally mask generator and not generator!!!!
         cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w, use_lrp=False)
         # normalize !each mask! by its min and max
 

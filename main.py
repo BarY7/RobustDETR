@@ -83,12 +83,15 @@ def get_args_parser():
                         help="L1 box coefficient in the matching cost")
     parser.add_argument('--set_cost_giou', default=2, type=float,
                         help="giou box coefficient in the matching cost")
+    parser.add_argument('--set_cost_rel', default=7, type=float,
+                        help="rel map coefficient in the matching cost")
+
     # * Loss coefficients
     parser.add_argument('--mask_loss_coef', default=1, type=float)
     parser.add_argument('--dice_loss_coef', default=1, type=float)
     parser.add_argument('--bbox_loss_coef', default=5, type=float)
     parser.add_argument('--giou_loss_coef', default=2, type=float)
-    parser.add_argument('--relmap_loss_coef', default=4, type=float)
+    parser.add_argument('--relmap_loss_coef', default=7, type=float)
     parser.add_argument('--lambda_background', default=2, type=float,
                         help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,
@@ -229,6 +232,7 @@ def main(args):
     orig_model.eval()
 
     copied_matcher = copy.deepcopy(criterion.matcher)
+    copied_matcher.cost_rel_coeff = 0
 
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
