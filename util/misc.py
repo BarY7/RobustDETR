@@ -191,8 +191,6 @@ class MetricLogger(object):
         return self.delimiter.join(loss_str)
 
     def write_to_tb(self, logger: SummaryWriter,stage, step):
-        if misc.x == 5:
-            print(2)
         for name, meter in self.meters.items():
             logger.add_scalar(f'{stage}_{name}', meter.value , step)
 
