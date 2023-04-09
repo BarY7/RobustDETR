@@ -103,6 +103,7 @@ class MaskGenerator:
         # self.abl = GeneratorAlbationNoAgg(model)
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             self.model = model.module
+            self.model_ddp = model
         else:
             self.model = model
         self.gen = Generator(self.model)
@@ -156,7 +157,10 @@ class MaskGenerator:
             )
         ]
 
-        outputs = self.model(samples)
+        if(self.model_ddp is not None):
+            outputs = self.model_ddp(outputs)
+        else:
+            outputs = self.model(samples)
 
         for hook in hooks:
             hook.remove()

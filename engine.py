@@ -201,6 +201,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
             print(f"Printing grads before sync - should be different. process {misc.get_rank()}")
             print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+            model(samples)
             losses.backward()
             # grads shuold be equal on all processes
             print("Printing after - shuold be same")
