@@ -391,6 +391,10 @@ class Generator:
 
             aggregated = aggregated[mask_idx].unsqueeze(0).unsqueeze(0)
 
+            print(
+                f"Printing AGG of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+            print(cam)
+
             # agg_list.append(aggregated)
             # requires_grad = False
 
@@ -404,11 +408,16 @@ class Generator:
             # del self.R_q_i
 
             cam = self.norm_rel_maps(aggregated)
+
+            print(
+                f"Printing CAM AFTER NORM of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+            print(cam)
+
             l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
 
             print(
                 f"Printing LOSS AFTER COMPUTE of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-            print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+            print(l)
 
             l = l * mask_generator.get_weight_coef()
             # print(torch.cuda.memory_summary())
@@ -418,6 +427,8 @@ class Generator:
                 l.backward(retain_graph=True)
                 print(f"Printing grads AFTER backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
                 print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+
+                # if(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad )
                 # print(torch.cuda.memory_summary())
             agg_list.append(torch.tensor(l.detach().item()))
             del l
