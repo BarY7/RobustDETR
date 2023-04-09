@@ -35,8 +35,8 @@ def apply_self_attention_rules(R_ss, R_sq, cam_ss):
 # rule 10 from paper
 def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply_self_in_rule_10=True):
     print(f"R_ss {R_ss}")
-    print(f"R_qq {R_qq}")
-    print(f"cam_sq {cam_sq}")
+    # print(f"R_qq {R_qq}")
+    # print(f"cam_sq {cam_sq}")
     R_ss_normalized = R_ss
     R_qq_normalized = R_qq
     if apply_normalization:
@@ -48,8 +48,11 @@ def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply
     if torch.isnan(R_sq_addition).any():
         print("GOT NAN, printing R_sq_addition")
         print(R_sq_addition)
+        print("normalized vals")
+        print(f"R_ss_norm {R_ss_normalized}")
+        print(f"R_qq_norm {R_qq_normalized}")
         print ("saving transformer module as old_module.pth")
-        raise "NAN error, saving current model"
+        raise BaseException("NAN error, saving current model")
     R_sq_addition[torch.isnan(R_sq_addition)] = 0
     return R_sq_addition
 

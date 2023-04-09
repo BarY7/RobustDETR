@@ -73,7 +73,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     save_interval = 100
     memory_interval = 100
 
-    print(torch.cuda.memory_summary())
+
+    prev_model = copy.deepcopy(model)
+    # print(torch.cuda.memory_summary())
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
         # with torch.autograd.detect_anomaly():
@@ -161,6 +163,9 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
             # important because loss updates the gradient
+
+            prev_model = copy.deepcopy(model)
+
             optimizer.zero_grad()
             loss_dict = criterion(outputs, targets, mask_generator)
             weight_dict = criterion.weight_dict # verify required grad is false
@@ -187,6 +192,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             losses.backward()
             if max_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
+
+
             optimizer.step()
 
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled, **loss_dict_reduced_unscaled)
@@ -217,11 +224,18 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             sys.stderr.write("\n")
             sys.stderr.write(f"Error found in iter {count} epoch {epoch}\n")
             checkpoint_path = f'{output_dir}/checkpoint_fail{epoch:04}_{count}.pth'
+            checkpoint_path_prev = f'{output_dir}/checkpoint_fail{epoch:04}_{count}_prev.pth'
             utils.save_on_master({
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
             }, checkpoint_path)
+
+            utils.save_on_master({
+                'model': prev_model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch,
+            }, checkpoint_path_prev)
 
             raise err
 
