@@ -424,10 +424,10 @@ class Generator:
             # print(torch.cuda.memory_summary())
             if mask_generator.is_train_mode():
                 print(f"Printing GRAD values before backprop  - process {misc.get_rank()}")
-                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 l.backward(retain_graph=True)
                 print(f"Printing GRAD values after backprop - process {misc.get_rank()}")
-                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 # print(torch.cuda.memory_summary())
             agg_list.append(torch.tensor(l.detach().item()))
             del l
