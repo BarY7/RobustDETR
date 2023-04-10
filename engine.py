@@ -70,7 +70,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     #         pass
 
     count = 0
-    save_interval = 100
+    save_interval = 30
     memory_interval = 100
 
     print(torch.cuda.memory_summary())
@@ -90,42 +90,57 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
 
 
-            batch_size = len(samples.tensors)
 
             # outputs = model(samples)
 
             # update in mask generator so rel maps loss can access this
+
             outputs = mask_generator.forward_and_update_feature_map_size(samples)
 
+            batch_size = len(samples.tensors) # 1
+            outputs_logits = outputs["pred_logits"]
+            # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
+            total_masks = outputs_logits.shape[1] # 100
+            rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h , mask_generator.w ).to(device)
+            for img_idx in range(batch_size):
+                for mask_idx in range(total_masks):
+                    flattened_rel = mask_generator.compute_norm_rel_map_with_gen_spaghetti\
+                        (batch_size,img_idx, mask_idx, outputs_logits,).detach()
+                         # index = logits_max_idx[img_idx, mask_idx]).detach()
+                    rel_masks[img_idx][mask_idx] = flattened_rel.reshape(1, mask_generator.h , mask_generator.w)
 
-            orig_output = orig_model(samples)
-            orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
+            outputs["pred_rel_maps"] = rel_masks
 
-            orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
-            # Retrieve the matching between the outputs of the last layer and the targets
-            orig_indices = copied_matcher(orig_outputs_without_aux, targets)
 
-            orig_src_idx = get_src_permutation_idx(orig_indices)
-
-            just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1] # b x 100
-            #for vis we dont want no objects
-            just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
-
-            # if(epoch%2 == 0):
-            #     print(5)
-            # else:
-            # poision!
-            for o_img_i, l in enumerate(orig_indices):
-                print("box shape : ")
-                print(targets[0]["boxes"].shape)
-                print("sampm shape : ")
-                targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
-                targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
-                for o_i,t_i in zip(*l):
-                    targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
-                    # for the real labels we don't want no obj
-                    targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-                    targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+            # orig_output = orig_model(samples)
+            # orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
+            #
+            # orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
+            # # Retrieve the matching between the outputs of the last layer and the targets
+            # orig_indices = copied_matcher(orig_outputs_without_aux, targets)
+            #
+            # orig_src_idx = get_src_permutation_idx(orig_indices)
+            #
+            # just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1] # b x 100
+            # #for vis we dont want no objects
+            # just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
+            #
+            # # if(epoch%2 == 0):
+            # #     print(5)
+            # # else:
+            # # poision!
+            # for o_img_i, l in enumerate(orig_indices):
+            #     print("box shape : ")
+            #     print(targets[0]["boxes"].shape)
+            #     print("sampm shape : ")
+            #     targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
+            #     targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
+            #     for o_i,t_i in zip(*l):
+            #         targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
+            #         # for the real labels we don't want no obj
+            #         # Try without it
+            #         targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+            #         targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
 
 
 
@@ -161,6 +176,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
             # important because loss updates the gradient
+
             optimizer.zero_grad()
             loss_dict = criterion(outputs, targets, mask_generator)
             weight_dict = criterion.weight_dict # verify required grad is false

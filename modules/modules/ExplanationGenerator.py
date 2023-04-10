@@ -82,6 +82,9 @@ class Generator:
     def __init__(self, model):
         self.model = model
         # self.model.eval()
+        self.use_lrp = False
+        self.normalize_self_attention = True
+        self.apply_self_in_rule_10 = True
 
     def forward(self, input_ids, attention_mask):
         return self.model(input_ids, attention_mask)
@@ -330,6 +333,7 @@ class Generator:
         outputs_logits = outputs['pred_logits']
         batch_size = outputs_logits.shape[0]
 
+        device = outputs_logits.device
         # kwargs = {"alpha": 1,
         #           "target_index": target_index}
         # TODO verify index
@@ -346,64 +350,8 @@ class Generator:
         for img_idx, mask_idx, tgt_img_idx, tgt_mask_idx in zip(batch_target_idx[0],batch_target_idx[1], tgt_idx[0], tgt_idx[1]):
             # print(torch.cuda.memory_summary())
             # index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
-            index = outputs_logits[img_idx, mask_idx, :-1].argmax(0)
-            one_hot = torch.zeros_like(outputs_logits).to(outputs_logits.device)
-            one_hot[img_idx, mask_idx, index] = 1
-            # one_hot[batch_target_idx[0][0], batch_target_idx[1][0], index] = 1
-            # one_hot_vector = one_hot
-            one_hot.requires_grad_(True)
-            one_hot = torch.sum(one_hot.cuda() * outputs_logits)
+            cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx, outputs_logits)
 
-            # self.model.zero_grad()
-            # one_hot.backward(retain_graph=True)
-
-            # if use_lrp:
-                # self.model.relprop(one_hot_vector, **kwargs)
-
-            decoder_blocks = self.model.transformer.decoder.layers
-            encoder_blocks = self.model.transformer.encoder.layers
-
-            # initialize relevancy matrices
-            image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
-            queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
-
-            device = encoder_blocks[0].self_attn.get_attn().device
-
-            # image self attention matrix
-            self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(device)
-            # queries self attention matrix
-            self.R_q_q = torch.eye(queries_num, queries_num).to(device)
-            # impact of image boxes on queries
-            self.R_q_i = torch.zeros(queries_num, image_bboxes).to(device)
-
-            # image self attention in the encoder
-            self.handle_self_attention_image(encoder_blocks, one_hot, batch_size)
-            #
-            # decoder self attention of queries followd by multi-modal attention
-            for blk in decoder_blocks:
-                # decoder self attention
-                self.handle_co_attn_self_query(blk, one_hot, batch_size)
-
-                # encoder decoder attention
-                self.handle_co_attn_query(blk, one_hot, batch_size)
-
-            aggregated = self.R_q_i
-
-            aggregated = aggregated[mask_idx].unsqueeze(0).unsqueeze(0)
-
-            # agg_list.append(aggregated)
-            # requires_grad = False
-
-            # del self.R_q_q
-            # del self.R_q_i
-            # del self.R_i_i
-            # del one_hot
-
-            # del self.R_i_i
-            # del self.R_q_q
-            # del self.R_q_i
-
-            cam = self.norm_rel_maps(aggregated)
             l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
             l = l * mask_generator.get_weight_coef()
             # print(torch.cuda.memory_summary())
@@ -412,7 +360,6 @@ class Generator:
                 # print(torch.cuda.memory_summary())
             agg_list.append(torch.tensor(l.detach().item()))
             del l
-            del aggregated
             del self.R_q_i
             del self.R_i_i
             del self.R_q_q
@@ -437,6 +384,57 @@ class Generator:
 
 
         return torch.tensor(agg_list).to(device).sum()
+
+    def compute_normalized_rel_map_iter(self, batch_size, img_idx, mask_idx, outputs_logits,index = None, ):
+        device = outputs_logits.device
+        if(index is None):
+            # index = outputs_logits[img_idx, mask_idx, :-1].argmax(0)
+            index = outputs_logits[img_idx, mask_idx, : ].argmax(0)
+        one_hot = torch.zeros_like(outputs_logits).to(outputs_logits.device)
+        one_hot[img_idx, mask_idx, index] = 1
+        # one_hot[batch_target_idx[0][0], batch_target_idx[1][0], index] = 1
+        # one_hot_vector = one_hot
+        one_hot.requires_grad_(True)
+        one_hot = torch.sum(one_hot.cuda() * outputs_logits)
+        # self.model.zero_grad()
+        # one_hot.backward(retain_graph=True)
+        # if use_lrp:
+        # self.model.relprop(one_hot_vector, **kwargs)
+        decoder_blocks = self.model.transformer.decoder.layers
+        encoder_blocks = self.model.transformer.encoder.layers
+        # initialize relevancy matrices
+        image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
+        queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
+        # device = encoder_blocks[0].self_attn.get_attn().device
+        # image self attention matrix
+        self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(device)
+        # queries self attention matrix
+        self.R_q_q = torch.eye(queries_num, queries_num).to(device)
+        # impact of image boxes on queries
+        self.R_q_i = torch.zeros(queries_num, image_bboxes).to(device)
+        # image self attention in the encoder
+        self.handle_self_attention_image(encoder_blocks, one_hot, batch_size)
+        #
+        # decoder self attention of queries followd by multi-modal attention
+        for blk in decoder_blocks:
+            # decoder self attention
+            self.handle_co_attn_self_query(blk, one_hot, batch_size)
+
+            # encoder decoder attention
+            self.handle_co_attn_query(blk, one_hot, batch_size)
+        aggregated = self.R_q_i
+        aggregated = aggregated[mask_idx].unsqueeze(0).unsqueeze(0)
+        # agg_list.append(aggregated)
+        # requires_grad = False
+        # del self.R_q_q
+        # del self.R_q_i
+        # del self.R_i_i
+        # del one_hot
+        # del self.R_i_i
+        # del self.R_q_q
+        # del self.R_q_i
+        cam = self.norm_rel_maps(aggregated)
+        return cam
 
     def generate_partial_lrp(self, img, target_index, index=None):
         outputs = self.model(img)

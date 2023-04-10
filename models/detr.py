@@ -121,9 +121,9 @@ class SetCriterion(nn.Module):
         # which contains all 100 boxes
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
-        # target_classes = torch.full(src_logits.shape[:2], self.num_classes,
-        #                             dtype=torch.int64, device=src_logits.device)
-        target_classes = torch.cat([t["o_pred_logits"].unsqueeze(0) for t in targets])
+        target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+                                    dtype=torch.int64, device=src_logits.device)
+        # target_classes = torch.cat([t["o_pred_logits"].unsqueeze(0) for t in targets])
         target_classes[idx] = target_classes_o
 
 
@@ -477,7 +477,7 @@ def build(args):
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
     matcher = build_matcher(args)
-    weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict = {'loss_ce': args.class_loss_coef , 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef
