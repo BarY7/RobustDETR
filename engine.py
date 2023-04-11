@@ -179,12 +179,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
                 # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
                 # important because loss updates the gradient
-                print(f"Printing grads before zero grad! {misc.get_rank()}")
-                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                # print(f"Printing grads before zero grad! {misc.get_rank()}")
+                # print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 optimizer.zero_grad()
-
-                print(f"Printing grads after zero grad! {misc.get_rank()}")
-                print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                #
+                # print(f"Printing grads after zero grad! {misc.get_rank()}")
+                # print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
 
                 loss_dict = criterion(outputs, targets, mask_generator)
 
@@ -211,12 +211,12 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # optimizer.zero_grad()
 
             print(f"Printing grads before sync - should be different. process {misc.get_rank()}")
-            print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+            # print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
             model(samples)
             losses.backward()
             # grads shuold be equal on all processes
             print("Printing after - shuold be same")
-            print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+            # print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
 
 
             if max_norm > 0:

@@ -106,6 +106,8 @@ class MaskGenerator:
             self.model_ddp = model
         else:
             self.model = model
+            self.model_ddp = None
+
         self.gen = Generator(self.model)
         self.h = None
         self.w = None
