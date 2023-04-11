@@ -33,28 +33,6 @@ def apply_self_attention_rules(R_ss, R_sq, cam_ss):
     return R_ss_addition, R_sq_addition
 
 # rule 10 from paper
-def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply_self_in_rule_10=True):
-    print(f"R_ss {R_ss}")
-    # print(f"R_qq {R_qq}")
-    # print(f"cam_sq {cam_sq}")
-    R_ss_normalized = R_ss
-    R_qq_normalized = R_qq
-    if apply_normalization:
-        R_ss_normalized = handle_residual(R_ss)
-        R_qq_normalized = handle_residual(R_qq)
-    R_sq_addition = torch.matmul(R_ss_normalized.t(), torch.matmul(cam_sq, R_qq_normalized))
-    if not apply_self_in_rule_10:
-        R_sq_addition = cam_sq
-    if torch.isnan(R_sq_addition).any():
-        print("GOT NAN, printing R_sq_addition")
-        print(R_sq_addition)
-        print("normalized vals")
-        print(f"R_ss_norm {R_ss_normalized}")
-        print(f"R_qq_norm {R_qq_normalized}")
-        print ("saving transformer module as old_module.pth")
-        raise BaseException("NAN error, saving current model")
-    R_sq_addition[torch.isnan(R_sq_addition)] = 0
-    return R_sq_addition
 
 # def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply_self_in_rule_10=True):
 #     R_ss_normalized = R_ss
@@ -67,7 +45,7 @@ def apply_mm_attention_rules(R_ss, R_qq, cam_sq, apply_normalization=True, apply
 #     if not apply_self_in_rule_10:
 #         R_sq_addition = cam_sq
 #     R_sq_addition[torch.isnan(R_sq_addition)] = 0
-#     return R_sq_addition
+#     return R_sq_additionl.
 
 # normalization- eq. 8+9
 # def handle_residual(orig_self_attention):
@@ -85,6 +63,9 @@ def handle_residual(orig_self_attention):
     diag_idx = range(self_attention.shape[-1])
     self_attention -= torch.eye(self_attention.shape[-1]).to(self_attention.device)
     assert self_attention[diag_idx, diag_idx].min() >= 0
+    # PROBLEM - in this line, self.attention.sum contains a row with 0
+    # Can make this happen by removing _pre_load_state_dict in transformer and usnig reg model with image 7281
+    # x / 0 = NAN which propagates and destroys gradients!
     self_attention = self_attention / self_attention.sum(dim=-1, keepdim=True)
     self_attention = self_attention + torch.eye(self_attention.shape[-1]).to(self_attention.device)
     return self_attention
@@ -93,9 +74,39 @@ class Generator:
     def __init__(self, model):
         self.model = model
         # self.model.eval()
+        self.nan_happened = False
+
+
+    def set_nan_happpened(self):
+        self.nan_happened = True
 
     def forward(self, input_ids, attention_mask):
         return self.model(input_ids, attention_mask)
+
+    def apply_mm_attention_rules(self,R_ss, R_qq, cam_sq, apply_normalization=True, apply_self_in_rule_10=True):
+        # print(f"R_ss {R_ss}")
+        # print(f"R_qq {R_qq}")
+        # print(f"cam_sq {cam_sq}")
+        R_ss_normalized = R_ss
+        R_qq_normalized = R_qq
+        if apply_normalization:
+            R_ss_normalized = handle_residual(R_ss)
+            R_qq_normalized = handle_residual(R_qq)
+        R_sq_addition = torch.matmul(R_ss_normalized.t(), torch.matmul(cam_sq, R_qq_normalized))
+        if not apply_self_in_rule_10:
+            R_sq_addition = cam_sq
+        if torch.isnan(R_sq_addition).any():
+            print("GOT NAN! skipping iteration")
+            self.set_nan_happpened()
+            # print("normalized vals")
+            # print(f"R_ss_norm {R_ss_normalized}")
+            # print(f"R_qq_norm {R_qq_normalized}")
+            # print ("saving transformer module as old_module.pth")
+            # raise BaseException("NAN error, saving current model")
+        R_sq_addition[torch.isnan(R_sq_addition)] = 0
+        return R_sq_addition
+
+
 
     def generate_transformer_att(self, img, target_index, index=None):
         outputs = self.model(img)
@@ -203,67 +214,67 @@ class Generator:
         grad_q_i = grad_q_i.reshape((-1, grad_q_i.shape[-2], grad_q_i.shape[-1]))
         cam_q_i = avg_heads(cam_q_i, grad_q_i)
 
-        self.R_q_i = self.R_q_i + apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
+        self.R_q_i = self.R_q_i + self.apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
                                                apply_normalization=self.normalize_self_attention,
                                                apply_self_in_rule_10=self.apply_self_in_rule_10)
         del cam_q_i
         del grad_q_i
 
-    def generate_ours(self, img, target_index, index=None, use_lrp=True, normalize_self_attention=True, apply_self_in_rule_10=True):
-        self.use_lrp = use_lrp
-        self.normalize_self_attention = normalize_self_attention
-        self.apply_self_in_rule_10 = apply_self_in_rule_10
-        outputs = self.model(img)
-        outputs = outputs['pred_logits']
-        kwargs = {"alpha": 1,
-                  "target_index": target_index}
-
-        if index == None:
-            index = outputs[0, target_index, :-1].max(1)[1]
-
-        kwargs["target_class"] = index
-
-        one_hot = torch.zeros_like(outputs).to(outputs.device)
-        one_hot[0, target_index, index] = 1
-        one_hot_vector = one_hot
-        one_hot.requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * outputs)
-
-        self.model.zero_grad()
-        one_hot.backward(retain_graph=True)
-
-        if use_lrp:
-            self.model.relprop(one_hot_vector, **kwargs)
-
-        decoder_blocks = self.model.transformer.decoder.layers
-        encoder_blocks = self.model.transformer.encoder.layers
-
-        # initialize relevancy matrices
-        image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
-        queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
-
-        # image self attention matrix
-        self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
-        # queries self attention matrix
-        self.R_q_q = torch.eye(queries_num, queries_num).to(encoder_blocks[0].self_attn.get_attn().device)
-        # impact of image boxes on queries
-        self.R_q_i = torch.zeros(queries_num, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
-
-        # image self attention in the encoder
-        self.handle_self_attention_image(encoder_blocks)
-
-        # decoder self attention of queries followd by multi-modal attention
-        for blk in decoder_blocks:
-            # decoder self attention
-            self.handle_co_attn_self_query(blk)
-
-            # encoder decoder attention
-            self.handle_co_attn_query(blk)
-        aggregated = self.R_q_i.unsqueeze_(0)
-
-        aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
-        return aggregated
-
+    # def generate_ours(self, img, target_index, index=None, use_lrp=True, normalize_self_attention=True, apply_self_in_rule_10=True):
+    #     self.use_lrp = use_lrp
+    #     self.normalize_self_attention = normalize_self_attention
+    #     self.apply_self_in_rule_10 = apply_self_in_rule_10
+    #     outputs = self.model(img)
+    #     outputs = outputs['pred_logits']
+    #     kwargs = {"alpha": 1,
+    #               "target_index": target_index}
+    #
+    #     if index == None:
+    #         index = outputs[0, target_index, :-1].max(1)[1]
+    #
+    #     kwargs["target_class"] = index
+    #
+    #     one_hot = torch.zeros_like(outputs).to(outputs.device)
+    #     one_hot[0, target_index, index] = 1
+    #     one_hot_vector = one_hot
+    #     one_hot.requires_grad_(True)
+    #     one_hot = torch.sum(one_hot.cuda() * outputs)
+    #
+    #     self.model.zero_grad()
+    #     one_hot.backward(retain_graph=True)
+    #
+    #     if use_lrp:
+    #         self.model.relprop(one_hot_vector, **kwargs)
+    #
+    #     decoder_blocks = self.model.transformer.decoder.layers
+    #     encoder_blocks = self.model.transformer.encoder.layers
+    #
+    #     # initialize relevancy matrices
+    #     image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
+    #     queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
+    #
+    #     # image self attention matrix
+    #     self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+    #     # queries self attention matrix
+    #     self.R_q_q = torch.eye(queries_num, queries_num).to(encoder_blocks[0].self_attn.get_attn().device)
+    #     # impact of image boxes on queries
+    #     self.R_q_i = torch.zeros(queries_num, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+    #
+    #     # image self attention in the encoder
+    #     self.handle_self_attention_image(encoder_blocks)
+    #
+    #     # decoder self attention of queries followd by multi-modal attention
+    #     for blk in decoder_blocks:
+    #         # decoder self attention
+    #         self.handle_co_attn_self_query(blk)
+    #
+    #         # encoder decoder attention
+    #         self.handle_co_attn_query(blk)
+    #     aggregated = self.R_q_i.unsqueeze_(0)
+    #
+    #     aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
+    #     return aggregated
+    #
 
     #NOTICE: IF WE HAVE outputs.size[0] > 1 THIS BREAKS!
     # def generate_ours_from_outputs(self, outputs, target_index, index=None, use_lrp=True, normalize_self_attention=True, apply_self_in_rule_10=True):
@@ -424,7 +435,7 @@ class Generator:
             #     f"Printing CAM AFTER NORM of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
             # print(cam)
 
-            l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
+            l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx, index)
             #
             # print(
             #     f"Printing LOSS AFTER COMPUTE of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
@@ -432,15 +443,29 @@ class Generator:
 
             l = l * mask_generator.get_weight_coef()
             # print(torch.cuda.memory_summary())
-            if mask_generator.is_train_mode():
+            if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():
                 # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
                 # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                 l.backward(retain_graph=True)
                 # print(f"Printing grads AFTER backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
                 # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                # print(torch.isnan(
+                #     self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad).any())
+                isnan_list = []
+                nograd_list = []
+                # for k, v in self.model.transformer.decoder.named_parameters():
+                #     if self.model.transformer.decoder.get_parameter(k).grad is None:
+                #         nograd_list.append(k)
+                #     else:
+                #         isnan_list.append(torch.isnan(
+                #             self.model.transformer.decoder.get_parameter(k).grad).any())
+                # print(isnan_list)
 
                 # if(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad )
                 # print(torch.cuda.memory_summary())
+            elif mask_generator.should_skip_backward():
+                print("ERR - SKIPPED BACKWARDS FOR ")
+            mask_generator.reset_nan_happened()
             agg_list.append(torch.tensor(l.detach().item()))
             del l
             del aggregated
@@ -618,7 +643,7 @@ class GeneratorAlbationNoAgg:
             cam_q_i = block.multihead_attn.get_attn().detach()
         grad_q_i = block.multihead_attn.get_attn_gradients().detach()
         cam_q_i = avg_heads(cam_q_i, grad_q_i)
-        self.R_q_i = apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
+        self.R_q_i = self.apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
                                                apply_normalization=self.normalize_self_attention,
                                                apply_self_in_rule_10=self.apply_self_in_rule_10)
 

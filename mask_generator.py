@@ -76,7 +76,6 @@ def plot_results(fig,pil_img, p, box, idx, title=''):
     plt.axis('off')
     # plt.show()
 
-
 CLASSES = [
     'N/A', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
     'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A',
@@ -119,6 +118,14 @@ class MaskGenerator:
 
         self.orig_rel = None
         self.query_ids = None
+
+
+    def should_skip_backward(self):
+        return self.gen.nan_happened
+
+    def reset_nan_happened(self):
+        self.gen.nan_happened = False
+
 
     def forward_and_update_feature_map_size(self,  samples):
         # keep only predictions with 0.8+ confidence

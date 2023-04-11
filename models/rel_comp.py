@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -14,6 +15,26 @@ from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegmRelMaps,
                            dice_loss, sigmoid_focal_loss, PostProcessSegm)
 from .transformer import build_transformer
+
+CLASSES = [
+    'N/A', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
+    'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A',
+    'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse',
+    'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack',
+    'umbrella', 'N/A', 'N/A', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis',
+    'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
+    'skateboard', 'surfboard', 'tennis racket', 'bottle', 'N/A', 'wine glass',
+    'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich',
+    'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
+    'chair', 'couch', 'potted plant', 'bed', 'N/A', 'dining table', 'N/A',
+    'N/A', 'toilet', 'N/A', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+    'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'N/A',
+    'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
+    'toothbrush'
+]
+
+CLASSES_RNG = torch.arange(len(CLASSES))
+
 
 
 def compute_fg_loss( relevance_map, target_seg, mse_critertion):
@@ -42,7 +63,7 @@ def compute_relevance_loss( outputs, targets):
     relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
     return relevance_loss
 
-def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets, tgt_idx, w, tgt_img_num, tgt_mask_idx):
+def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets, tgt_idx, w, tgt_img_num, tgt_mask_idx, pred_class = None):
     src_masks = torch.reshape(src_masks, [src_masks.shape[0], src_masks.shape[1], h, w], )
     # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(outputs,
     #                                                                           torch.tensor([mask_idx])) for mask_idx
@@ -58,6 +79,7 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     # upsample predictions to the target size
     src_masks = interpolate(src_masks, size=target_masks.shape[-2:],
                             mode="bilinear", align_corners=False)
+    # Notice we norm twice.
     src_masks = normalize_rel_maps(src_masks)
 
     mask_generator.set_relevance(src_masks.detach())
@@ -90,6 +112,10 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     #                      zip(pred_masks, target_masks)]).sum() / num_boxes
 
     loss = compute_relevance_loss(pred_masks, target_masks)
+    label = targets[tgt_img_num]["labels"][tgt_mask_idx]
+    if(pred_class):
+        correct_pred = pred_class.item() == label.item()
+    plt.scatter([label.item()], [loss.item()], c='blue' if correct_pred else 'red', edgecolors='black')
     # del loss
     # loss = torch.tensor([0]).float().cuda()
     # loss.requires_grad_()

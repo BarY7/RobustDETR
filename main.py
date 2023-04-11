@@ -215,9 +215,14 @@ def main(args):
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1
 
+    orig_model = copy.deepcopy(model)
+    orig_model.eval()
+
+    copied_matcher = copy.deepcopy(criterion.matcher)
+
     if args.eval:
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, -1, args.output_dir, logger
+            model, criterion, postprocessors, data_loader_val, base_ds, device, -1, orig_model, copied_matcher ,args.output_dir, logger
         )
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
@@ -225,10 +230,6 @@ def main(args):
 
     print("Start training")
 
-    orig_model = copy.deepcopy(model)
-    orig_model.eval()
-
-    copied_matcher = copy.deepcopy(criterion.matcher)
 
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
