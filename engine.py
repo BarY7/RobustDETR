@@ -10,6 +10,7 @@ import sys
 import gc
 from typing import Iterable
 import traceback
+from contextlib import nullcontext
 
 
 import cv2
@@ -31,6 +32,7 @@ from torch import nn
 import matplotlib.pyplot as plt
 
 from modules.modules.explainer import get_image_with_relevance, show_cam_on_image
+from util import misc
 from util.model_output_utils import otsu_thresh
 
 
@@ -73,30 +75,40 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     save_interval = 1
     memory_interval = 100
 
+    dist = False
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        dist = True
 
-    # print(torch.cuda.memory_summary())
+    print(torch.cuda.memory_summary())
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
-        # with torch.autograd.detect_anomaly():
+
+        print(f"I AM NUMBER {misc.get_rank()}")
         try:
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             # if count % memory_interval == 0:
-            print(f"SAMPLES SHAPEEEEEEEEEEEEEEEE {samples.tensors.shape}")
-            print(torch.cuda.memory_summary(device=None, abbreviated=False))
+            # print(f"SAMPLES SHAPEEEEEEEEEEEEEEEE {samples.tensors.shape}")
+            # print(torch.cuda.memory_summary(device=None, abbreviated=False))
 
                 # torch.cuda.empty_cache()
 
-            mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
+            mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'], dist=dist)
 
 
-            # batch_size = len(samples.tensors)
-            #
-            # # outputs = model(samples)
-            #
-            # # update in mask generator so rel maps loss can access this
-            outputs = mask_generator.forward_and_update_feature_map_size(samples)
+            batch_size = len(samples.tensors)
+
+            # outputs = model(samples)
+
+            # update in mask generator so rel maps loss can access this
+            if dist:
+                cm = model.no_sync()
+            else:
+                cm = nullcontext()
+
+            with cm:
+                outputs = mask_generator.forward_and_update_feature_map_size(samples)
 
 
             # orig_output = orig_model(samples)
@@ -130,43 +142,42 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
 
 
-            # orig_boxes = orig_output['pred_boxes'][orig_src_idx]
-            #
-            # # POISION TARGETS
-            # for i,b in zip(orig_boxes[0],orig_boxes[1]):
-            #     targets[i]['boxes']
-            # [ for i,t in enumerate(targets)]
+                # orig_boxes = orig_output['pred_boxes'][orig_src_idx]
+                #
+                # # POISION TARGETS
+                # for i,b in zip(orig_boxes[0],orig_boxes[1]):
+                #     targets[i]['boxes']
+                # [ for i,t in enumerate(targets)]
 
-            # SET_FEATURE_MAP_SIZE = True
+                # SET_FEATURE_MAP_SIZE = True
 
-            # masks_amount = outputs['pred_logits'].shape[1]
+                # masks_amount = outputs['pred_logits'].shape[1]
 
-            # h, w = mask_generator.update_feature_map_size(outputs, samples)
+                # h, w = mask_generator.update_feature_map_size(outputs, samples)
 
-            # x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
-            # masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(get_one_output_from_batch(outputs, i), utils.NestedTensor(*samples.decompose_single_item(i)), targets[i], method) for i in range(batch_size)])
+                # x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
+                # masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(get_one_output_from_batch(outputs, i), utils.NestedTensor(*samples.decompose_single_item(i)), targets[i], method) for i in range(batch_size)])
 
-            # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
-            #                                                                           torch.tensor([mask_idx])) for mask_idx
-            #                         in range((masks_amount))]) for i in range(batch_size)]
-            # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
+                # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
+                #                                                                           torch.tensor([mask_idx])) for mask_idx
+                #                         in range((masks_amount))]) for i in range(batch_size)]
+                # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
 
-            # outputs["pred_masks"] = new_masks
+                # outputs["pred_masks"] = new_masks
 
-            # # reshape masks
-            # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-            # results = postprocessors['bbox'](feature_map_relevancy, orig_target_sizes)
-            # # if 'segm' in postprocessors.keys():
-            # postprocessors['segm'] = PostProcessSegm()
-            # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-            # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
+                # # reshape masks
+                # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
+                # results = postprocessors['bbox'](feature_map_relevancy, orig_target_sizes)
+                # # if 'segm' in postprocessors.keys():
+                # postprocessors['segm'] = PostProcessSegm()
+                # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
+                # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
-            # important because loss updates the gradient
+                # important because loss updates the gradient
+                optimizer.zero_grad()
+                loss_dict = criterion(outputs, targets, mask_generator)
 
-            # prev_model = copy.deepcopy(model)
-
-            optimizer.zero_grad()
-            loss_dict = criterion(outputs, targets, mask_generator)
+            # out of no sync
             weight_dict = criterion.weight_dict # verify required grad is false
             losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
@@ -188,7 +199,14 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # we zero grad earlier - each ,ask accumaltes gradient so we can't use it here.
             # optimizer.zero_grad()
 
+            print(f"Printing grads before sync - should be different. process {misc.get_rank()}")
+            print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
             losses.backward()
+            # grads shuold be equal on all processes
+            print("Printing after - shuold be same")
+            print(model.module.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+
+
             if max_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
 
