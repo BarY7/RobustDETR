@@ -129,25 +129,6 @@ class MaskGenerator:
 
 
     def forward_and_update_feature_map_size(self,  samples):
-        # keep only predictions with 0.8+ confidence
-        # probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
-        # keep = probas.max(-1).values > 0.5
-
-        # ########### for visualizations
-        # boxes = outputs['pred_boxes'].cpu()
-        # im = samples.tensors[0].permute(1, 2, 0).data.cpu().numpy()
-        # im = (im - im.min()) / (im.max() - im.min())
-        # im = np.uint8(im * 255)
-        # im = Image.fromarray(im)
-        # # im = T.ToPILImage()(samples.tensors[0])
-        # # convert boxes from [0; 1] to image scales
-        # bboxes_scaled = rescale_bboxes(boxes[0, keep.cpu()], im.size)
-        # ############ for visualizations
-
-
-        # if keep.nonzero().shape[0] <= 1:
-        #     print("no segmentation")
-
         # use lists to store the outputs via up-values
         vis_shape, target_shape = [], []
         if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
@@ -163,7 +144,7 @@ class MaskGenerator:
             )
         ]
 
-        model_no_ddp(samples)
+        outputs = model_no_ddp(samples)
 
         for hook in hooks:
             hook.remove()

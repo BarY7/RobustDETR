@@ -253,7 +253,7 @@ class Generator:
             cam_q_i = avg_heads(cam, grad)
         else:
             cam_q_i = avg_heads(cam.detach(), grad.detach())
-        self.R_q_i = self.R_q_i + apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
+        self.R_q_i = self.R_q_i + self.apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
                                                            apply_normalization=self.normalize_self_attention,
                                                            apply_self_in_rule_10=self.apply_self_in_rule_10)
 
@@ -429,7 +429,8 @@ class Generator:
             # index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
             cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx, outputs_logits)
 
-            l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w, tgt_img_idx, tgt_mask_idx)
+            l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
+                                          tgt_img_idx, tgt_mask_idx,)
             l = l * mask_generator.get_weight_coef()
             # print(torch.cuda.memory_summary())
             if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():

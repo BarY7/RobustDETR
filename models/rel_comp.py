@@ -118,13 +118,14 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     #                      zip(pred_masks, target_masks)]).sum() / num_boxes
 
     loss = compute_relevance_loss(pred_masks, target_masks)
-    label = targets[tgt_img_num]["labels"][tgt_mask_idx]
-    if(pred_class):
-        correct_pred = pred_class.item() == label.item()
-    plt.scatter([label.item()], [loss.item()], c='blue' if correct_pred else 'red', edgecolors='black')
-    # del loss
-    # loss = torch.tensor([0]).float().cuda()
-    # loss.requires_grad_()
+
+    # label = targets[tgt_img_num]["labels"][tgt_mask_idx]
+    # if(pred_class):
+    #     correct_pred = pred_class.item() == label.item()
+    # else:
+    #     correct_pred = True
+    # plt.scatter([label.item()], [loss.item()], c='blue' if correct_pred else 'red', edgecolors='black')
+
     del target_masks
     del pred_masks
 

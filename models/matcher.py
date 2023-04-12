@@ -83,13 +83,16 @@ class HungarianMatcher(nn.Module):
                 tgt_masks = torch.cat([v["masks"] for v in targets])
                 pred_rel = interpolate_and_resize(outputs["pred_rel_maps"].squeeze(0), tgt_masks)
                 pred_rel = pred_rel.flatten(0,1)
-                init_rel = torch.zeros(pred_rel.shape[0], tgt_masks.shape[0]).to(tgt_masks.device)
 
-                for j in range(tgt_masks.shape[0]):
-                    init_rel[:, j] = compute_relevance_loss(pred_rel, torch.cat(init_rel.shape[0] * [tgt_masks[j].unsqueeze(0)])
-                                                            , reduction='none').mean([1,2])
-                cost_rel = init_rel
-
+                # for j in range(tgt_masks.shape[0]):
+                #     init_rel[:, j] = compute_relevance_loss(pred_rel, torch.cat(init_rel.shape[0] * [tgt_masks[j].unsqueeze(0)])
+                #                                             , reduction='none').mean([1,2])
+                # cost_rel = init_rel
+                pred_expanded = pred_rel.unsqueeze(1).expand(pred_rel.shape[0], tgt_masks.shape[0], *pred_rel.shape[-2:])
+                tgt_expanded = tgt_masks.unsqueeze(0).expand(pred_rel.shape[0],*tgt_masks.shape)
+                cost_rel = compute_relevance_loss(pred_expanded, tgt_expanded
+                                                            , reduction='none').mean([2,3])
+                print(1)
             else:
                 cost_rel = 0
 
