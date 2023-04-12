@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 from modules.modules.explainer import get_image_with_relevance, show_cam_on_image
 from util import misc
 from util.model_output_utils import otsu_thresh
+from util.timer_utils import catchtime
 
 
 def get_src_permutation_idx(indices):
@@ -72,7 +73,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     #         pass
 
     count = 0
-    save_interval = 1
+    save_interval = 30
     memory_interval = 100
 
     dist = False
@@ -97,7 +98,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'], dist=dist)
 
 
-            batch_size = len(samples.tensors)
 
             # outputs = model(samples)
 
@@ -109,6 +109,21 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
             with cm:
                 outputs = mask_generator.forward_and_update_feature_map_size(samples)
+
+            with catchtime('Compute rel maps for all masks') as t:
+                batch_size = len(samples.tensors) # 1
+                outputs_logits = outputs["pred_logits"]
+                # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
+                total_masks = outputs_logits.shape[1] # 100
+                rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h , mask_generator.w ).to(device)
+                for img_idx in range(batch_size):
+                    for mask_idx in range(total_masks):
+                        flattened_rel = mask_generator.compute_norm_rel_map_with_gen\
+                            (batch_size,img_idx, mask_idx, outputs_logits, req_grad=True).detach()
+                             # index = logits_max_idx[img_idx, mask_idx]).detach()
+                        rel_masks[img_idx][mask_idx] = flattened_rel.reshape(1, mask_generator.h , mask_generator.w)
+
+                outputs["pred_rel_maps"] = rel_masks
 
 
             # orig_output = orig_model(samples)
@@ -137,6 +152,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             #     for o_i,t_i in zip(*l):
             #         targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
             #         # for the real labels we don't want no obj
+            #         # Try without it
             #         targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
             #         targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
 
@@ -174,9 +190,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
                 # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
                 # important because loss updates the gradient
-                optimizer.zero_grad()
-                loss_dict = criterion(outputs, targets, mask_generator)
-
+            with catchtime('Compute loss') as t:
+                    optimizer.zero_grad()
+                    loss_dict = criterion(outputs, targets, mask_generator)
+    
             # out of no sync
             weight_dict = criterion.weight_dict # verify required grad is false
             losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
@@ -225,7 +242,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             if count % save_interval == 0:
                 if output_dir:
                     # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
-                    vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "train")
+                    with catchtime('Visualize results') as t:
+                        vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "train")
 
             del outputs
             del samples

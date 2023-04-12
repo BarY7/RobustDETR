@@ -12,6 +12,7 @@ from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized)
 from util.model_output_utils import normalize_rel_maps
+from util.timer_utils import catchtime
 
 from .backbone import build_backbone
 from .matcher import build_matcher
@@ -266,9 +267,6 @@ class SetCriterion(nn.Module):
         # get src masks from outputs, just for the 'true' masks
         h, w = mask_generator.h, mask_generator.w
 
-        print(f"idx {idx}")
-        print(f"{len(targets)}")
-        print(outputs["pred_logits"].shape)
         if(idx[0].shape[0] == 0):
             loss = torch.tensor(0).to(outputs["pred_logits"].device)
 
@@ -344,7 +342,8 @@ class SetCriterion(nn.Module):
         for loss in self.losses:
             # indices: list, len 2. 0: indices in outputs, 1: matching indices in targets.
             if loss == "rel_maps":
-                losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes, mask_generator=mask_generator))
+                with catchtime(f'Compute loss rel maps, masks {targets[0]["masks"].shape[0]}') as t:
+                    losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes, mask_generator=mask_generator))
             else:
                 losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
@@ -477,7 +476,7 @@ def build(args):
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
     matcher = build_matcher(args)
-    weight_dict = {'loss_ce': 0.2, 'loss_bbox': args.bbox_loss_coef}
+    weight_dict = {'loss_ce': args.class_loss_coef , 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:
         weight_dict["loss_mask"] = args.mask_loss_coef

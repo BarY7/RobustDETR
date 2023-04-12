@@ -290,6 +290,9 @@ class MaskGenerator:
         return masks
 
 
+    def compute_norm_rel_map_with_gen(self, batch_size, img_idx, mask_idx, outputs_logits, index = None, req_grad = True):
+        return self.gen.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx, outputs_logits, index, req_grad)
+
     # Get the explanations
     def get_panoptic_masks_no_thresholding(self, outputs_single_item, idx):
         cam = self.gen.generate_ours_from_outputs(outputs_single_item, idx, use_lrp=False)
@@ -308,10 +311,6 @@ class MaskGenerator:
                          zip(tgt_idx[0], tgt_idx[1])]
         target_labels = torch.cat(target_labels)
 
-        # target_labels_vis = [targets[im]["labels_vis"][ind].float().cpu().unsqueeze(0) for im, ind in
-        #                  zip(tgt_idx[0], tgt_idx[1])]
-        # target_labels_vis = torch.cat(target_labels_vis)
-
         pred_probs = [outputs["pred_logits"][im][ind].float().cpu().unsqueeze(0) for im, ind in zip(idx[0], idx[1])]
         pred_probs = torch.cat(pred_probs)
 
@@ -321,6 +320,7 @@ class MaskGenerator:
         mask_generator.set_labels(target_labels)
         mask_generator.set_src_idx(idx)
         mask_generator.set_query_ids(idx[1])
+
 
         cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w, use_lrp=False)
         # normalize !each mask! by its min and max
