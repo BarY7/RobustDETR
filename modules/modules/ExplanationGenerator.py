@@ -135,34 +135,76 @@ class Generator:
         aggregated = aggregated[:, target_index, :].unsqueeze_(0)
         return aggregated
 
-    def handle_self_attention_image(self, blocks, one_hot, batch_size=1):
-        for blk in blocks:
-            if self.use_lrp:
-                cam = blk.self_attn.get_attn_cam()
+    def handle_self_attention_image(self, blocks, one_hot, batch_size=1, req_grad = True):
+
+        all_blocks_cam = [blk.self_attn.get_attn() for blk in blocks]
+        all_grads = torch.autograd.grad(one_hot, all_blocks_cam, retain_graph=True)
+        for i in range(len(all_blocks_cam)):
+            if req_grad:
+                cam = avg_heads(all_blocks_cam[i], all_grads[i])
             else:
-                cam = blk.self_attn.get_attn()
-            grad = torch.autograd.grad(one_hot, [cam], retain_graph=True)[0]
-
-            # We don't want to average attention of different batch elements
-            # num_heads = blk.self_attn.num_heads
-
-            # avg heads on same batch size
-            cam = cam.reshape((-1, cam.shape[-2], cam.shape[-1]))
-            grad = grad.reshape((-1, grad.shape[-2], grad.shape[-1]))
-            cam = avg_heads(cam, grad)
-
-            # cam = torch.cat([avg_heads(cam[i * num_heads : (i+1) * num_heads,:,:], grad[i * num_heads : (i+1) * num_heads,:,:]).unsqueeze(0) for i in range(batch_size)])
-
+                cam = avg_heads(all_blocks_cam[i].detach(), all_grads[i].detach())
             self.R_i_i = self.R_i_i + torch.matmul(cam, self.R_i_i)
 
-            del cam
-            del grad
 
-    def handle_co_attn_self_query(self, block, one_hot, batch_size=1):
+        # with catchtime('not super at all') as t:
+        # for blk in blocks:
+        #     if self.use_lrp:
+        #         cam = blk.self_attn.get_attn_cam()
+        #     else:
+        #         cam = blk.self_attn.get_attn()
+        #     grad = torch.autograd.grad(one_hot, [cam], retain_graph=True)[0]
+        #
+        #
+        #     # We don't want to average attention of different batch elements
+        #     # num_heads = blk.self_attn.num_heads
+        #
+        #     # avg heads on same batch size
+        #     cam = cam.reshape((-1, cam.shape[-2], cam.shape[-1]))
+        #     grad = grad.reshape((-1, grad.shape[-2], grad.shape[-1]))
+        #     cam = avg_heads(cam, grad)
+        #
+        #     # cam = torch.cat([avg_heads(cam[i * num_heads : (i+1) * num_heads,:,:], grad[i * num_heads : (i+1) * num_heads,:,:]).unsqueeze(0) for i in range(batch_size)])
+        #
+        #     self.R_i_i = self.R_i_i + torch.matmul(cam, self.R_i_i)
+        #
+        #     del cam
+        #     del grad
+        #
+        # print((self.R_i_i == tmp).all())
+        # print("xx")
+
+
+    def handle_co_attn_self_query_blocks(self,one_hot, cam, grad, req_grad=True):
+        if req_grad:
+            cam = avg_heads(cam, grad)
+        else:
+            cam = avg_heads(cam.detach(), grad.detach())
+        R_q_q_add, R_q_i_add = apply_self_attention_rules(self.R_q_q, self.R_q_i, cam)
+        self.R_q_q = self.R_q_q + R_q_q_add
+        self.R_q_i = self.R_q_i + R_q_i_add
+        # print(f"tmp q_q {tmp_q_q}")
+        # print(f"tmp q_i {tmp_q_i}")
+
+
+
+    def handle_co_attn_self_query_depracated(self, block, one_hot, blocks):
+
+        # with catchtime('MY super versiom') as t:
+        #     all_blocks_cam = [blk.self_attn.get_attn() for blk in blocks]
+        #     all_grads = torch.stack(torch.autograd.grad(one_hot, all_blocks_cam, retain_graph=True))
+        #
+        # tmp = self.R_i_i
+        # for i in range(len(all_blocks_cam)):
+        #     cam = avg_heads(all_blocks_cam[i], all_grads[i])
+        #     R_q_q_add, R_q_i_add = apply_self_attention_rules(self.R_q_q, self.R_q_i, cam)
+        #     self.R_q_q = self.R_q_q + R_q_q_add
+        #     self.R_q_i = self.R_q_i + R_q_i_add
         if self.use_lrp:
             cam = block.self_attn.get_attn_cam()
         else:
             cam = block.self_attn.get_attn()
+
         grad = torch.autograd.grad(one_hot, [cam], retain_graph=True)[0]
 
         # We don't want to average attention of different batch elements
@@ -180,6 +222,19 @@ class Generator:
         del R_q_q_add
         del cam
         del grad
+        print(f"Print my result R_q_q {self.R_q_q}")
+        print(f"Print my result R_q_i {self.R_q_i}")
+
+
+    def handle_co_attn_query_blocks(self, one_hot, cam, grad, req_grad = True):
+        if req_grad:
+            cam_q_i = avg_heads(cam, grad)
+        else:
+            cam_q_i = avg_heads(cam.detach(), grad.detach())
+        self.R_q_i = self.R_q_i + apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
+                                                           apply_normalization=self.normalize_self_attention,
+                                                           apply_self_in_rule_10=self.apply_self_in_rule_10)
+
 
     def handle_co_attn_query(self, block,one_hot, batch_size=1):
         if self.use_lrp:
@@ -201,60 +256,60 @@ class Generator:
         del cam_q_i
         del grad_q_i
 
-    def generate_ours(self, img, target_index, index=None, use_lrp=True, normalize_self_attention=True, apply_self_in_rule_10=True):
-        self.use_lrp = use_lrp
-        self.normalize_self_attention = normalize_self_attention
-        self.apply_self_in_rule_10 = apply_self_in_rule_10
-        outputs = self.model(img)
-        outputs = outputs['pred_logits']
-        kwargs = {"alpha": 1,
-                  "target_index": target_index}
-
-        if index == None:
-            index = outputs[0, target_index, :-1].max(1)[1]
-
-        kwargs["target_class"] = index
-
-        one_hot = torch.zeros_like(outputs).to(outputs.device)
-        one_hot[0, target_index, index] = 1
-        one_hot_vector = one_hot
-        one_hot.requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * outputs)
-
-        self.model.zero_grad()
-        one_hot.backward(retain_graph=True)
-
-        if use_lrp:
-            self.model.relprop(one_hot_vector, **kwargs)
-
-        decoder_blocks = self.model.transformer.decoder.layers
-        encoder_blocks = self.model.transformer.encoder.layers
-
-        # initialize relevancy matrices
-        image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
-        queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
-
-        # image self attention matrix
-        self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
-        # queries self attention matrix
-        self.R_q_q = torch.eye(queries_num, queries_num).to(encoder_blocks[0].self_attn.get_attn().device)
-        # impact of image boxes on queries
-        self.R_q_i = torch.zeros(queries_num, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
-
-        # image self attention in the encoder
-        self.handle_self_attention_image(encoder_blocks)
-
-        # decoder self attention of queries followd by multi-modal attention
-        for blk in decoder_blocks:
-            # decoder self attention
-            self.handle_co_attn_self_query(blk)
-
-            # encoder decoder attention
-            self.handle_co_attn_query(blk)
-        aggregated = self.R_q_i.unsqueeze_(0)
-
-        aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
-        return aggregated
+    # def generate_ours(self, img, target_index, index=None, use_lrp=True, normalize_self_attention=True, apply_self_in_rule_10=True):
+    #     self.use_lrp = use_lrp
+    #     self.normalize_self_attention = normalize_self_attention
+    #     self.apply_self_in_rule_10 = apply_self_in_rule_10
+    #     outputs = self.model(img)
+    #     outputs = outputs['pred_logits']
+    #     kwargs = {"alpha": 1,
+    #               "target_index": target_index}
+    #
+    #     if index == None:
+    #         index = outputs[0, target_index, :-1].max(1)[1]
+    #
+    #     kwargs["target_class"] = index
+    #
+    #     one_hot = torch.zeros_like(outputs).to(outputs.device)
+    #     one_hot[0, target_index, index] = 1
+    #     one_hot_vector = one_hot
+    #     one_hot.requires_grad_(True)
+    #     one_hot = torch.sum(one_hot.cuda() * outputs)
+    #
+    #     self.model.zero_grad()
+    #     one_hot.backward(retain_graph=True)
+    #
+    #     if use_lrp:
+    #         self.model.relprop(one_hot_vector, **kwargs)
+    #
+    #     decoder_blocks = self.model.transformer.decoder.layers
+    #     encoder_blocks = self.model.transformer.encoder.layers
+    #
+    #     # initialize relevancy matrices
+    #     image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
+    #     queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
+    #
+    #     # image self attention matrix
+    #     self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+    #     # queries self attention matrix
+    #     self.R_q_q = torch.eye(queries_num, queries_num).to(encoder_blocks[0].self_attn.get_attn().device)
+    #     # impact of image boxes on queries
+    #     self.R_q_i = torch.zeros(queries_num, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+    #
+    #     # image self attention in the encoder
+    #     self.handle_self_attention_image(encoder_blocks)
+    #
+    #     # decoder self attention of queries followd by multi-modal attention
+    #     for blk in decoder_blocks:
+    #         # decoder self attention
+    #         self.handle_co_attn_self_query(blk)
+    #
+    #         # encoder decoder attention
+    #         self.handle_co_attn_query(blk)
+    #     aggregated = self.R_q_i.unsqueeze_(0)
+    #
+    #     aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
+    #     return aggregated
 
 
     #NOTICE: IF WE HAVE outputs.size[0] > 1 THIS BREAKS!
@@ -385,7 +440,7 @@ class Generator:
 
         return torch.tensor(agg_list).to(device).sum()
 
-    def compute_normalized_rel_map_iter(self, batch_size, img_idx, mask_idx, outputs_logits,index = None, ):
+    def compute_normalized_rel_map_iter(self, batch_size, img_idx, mask_idx, outputs_logits,index = None, req_grad = True ):
         device = outputs_logits.device
         if(index is None):
             # index = outputs_logits[img_idx, mask_idx, :-1].argmax(0)
@@ -413,15 +468,23 @@ class Generator:
         # impact of image boxes on queries
         self.R_q_i = torch.zeros(queries_num, image_bboxes).to(device)
         # image self attention in the encoder
-        self.handle_self_attention_image(encoder_blocks, one_hot, batch_size)
-        #
-        # decoder self attention of queries followd by multi-modal attention
-        for blk in decoder_blocks:
-            # decoder self attention
-            self.handle_co_attn_self_query(blk, one_hot, batch_size)
 
-            # encoder decoder attention
-            self.handle_co_attn_query(blk, one_hot, batch_size)
+        if not req_grad:
+            self.R_i_i = self.R_i_i.detach()
+            self.R_q_q = self.R_q_q.detach()
+            self.R_q_i = self.R_q_i.detach()
+
+        num_dec_blocks = len(decoder_blocks)
+        self.handle_self_attention_image(encoder_blocks, one_hot, batch_size, req_grad)
+
+        self_blocks_cam = [blk.self_attn.get_attn() for blk in decoder_blocks]
+        multihead_blocks_cam = [blk.multihead_attn.get_attn() for blk in decoder_blocks]
+        self_dec_grads = torch.autograd.grad(one_hot, self_blocks_cam, retain_graph=True)
+        multihead_dec_grads = torch.autograd.grad(one_hot, multihead_blocks_cam, retain_graph=True)
+        for i in range(num_dec_blocks):
+            self.handle_co_attn_self_query_blocks(one_hot, self_blocks_cam[i], self_dec_grads[i], req_grad)
+            self.handle_co_attn_query_blocks(one_hot, multihead_blocks_cam[i], multihead_dec_grads[i], req_grad)
+
         aggregated = self.R_q_i
         aggregated = aggregated[mask_idx].unsqueeze(0).unsqueeze(0)
         # agg_list.append(aggregated)
@@ -554,92 +617,102 @@ class GeneratorAlbationNoAgg:
         self.model = model
         # self.model.eval()
 
-    def forward(self, input_ids, attention_mask):
-        return self.model(input_ids, attention_mask)
-
-    def handle_self_attention_image(self, blocks):
-        for blk in blocks:
-            grad = blk.self_attn.get_attn_gradients().detach()
-            if self.use_lrp:
-                cam = blk.self_attn.get_attn_cam().detach()
-            else:
-                cam = blk.self_attn.get_attn().detach()
-            cam = avg_heads(cam, grad)
-            self.R_i_i = torch.matmul(cam, self.R_i_i)
-
-    def handle_co_attn_self_query(self, block):
-        grad = block.self_attn.get_attn_gradients().detach()
-        if self.use_lrp:
-            cam = block.self_attn.get_attn_cam().detach()
-        else:
-            cam = block.self_attn.get_attn().detach()
-        cam = avg_heads(cam, grad)
-        R_q_q_add, R_q_i_add = apply_self_attention_rules(self.R_q_q, self.R_q_i, cam)
-        self.R_q_q = R_q_q_add
-        self.R_q_i = R_q_i_add
-
-    def handle_co_attn_query(self, block):
-        if self.use_lrp:
-            cam_q_i = block.multihead_attn.get_attn_cam().detach()
-        else:
-            cam_q_i = block.multihead_attn.get_attn().detach()
-        grad_q_i = block.multihead_attn.get_attn_gradients().detach()
-        cam_q_i = avg_heads(cam_q_i, grad_q_i)
-        self.R_q_i = apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
-                                               apply_normalization=self.normalize_self_attention,
-                                               apply_self_in_rule_10=self.apply_self_in_rule_10)
-
-    def generate_ours_abl(self, img, target_index, index=None, use_lrp=False, normalize_self_attention=False, apply_self_in_rule_10=True):
-        self.use_lrp = use_lrp
-        self.normalize_self_attention = normalize_self_attention
-        self.apply_self_in_rule_10 = apply_self_in_rule_10
-        outputs = self.model(img)
-        outputs = outputs['pred_logits']
-        kwargs = {"alpha": 1,
-                  "target_index": target_index}
-
-        if index == None:
-            index = outputs[0, target_index, :-1].max(1)[1]
-
-        kwargs["target_class"] = index
-
-        one_hot = torch.zeros_like(outputs).to(outputs.device)
-        one_hot[0, target_index, index] = 1
-        one_hot_vector = one_hot
-        one_hot.requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * outputs)
-
-        self.model.zero_grad()
-        one_hot.backward(retain_graph=True)
-
-        if use_lrp:
-            self.model.relprop(one_hot_vector, **kwargs)
-
-        decoder_blocks = self.model.transformer.decoder.layers
-        encoder_blocks = self.model.transformer.encoder.layers
-
-        # initialize relevancy matrices
-        image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
-        queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
-
-        # image self attention matrix
-        self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
-        # queries self attention matrix
-        self.R_q_q = torch.eye(queries_num, queries_num).to(encoder_blocks[0].self_attn.get_attn().device)
-        # impact of image boxes on queries
-        self.R_q_i = torch.zeros(queries_num, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
-
-        # image self attention in the encoder
-        self.handle_self_attention_image(encoder_blocks)
-
-        # decoder self attention of queries followd by multi-modal attention
-        for blk in decoder_blocks:
-            # decoder self attention
-            self.handle_co_attn_self_query(blk)
-
-            # encoder decoder attention
-            self.handle_co_attn_query(blk)
-        aggregated = self.R_q_i.unsqueeze_(0)
-
-        aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
-        return aggregated
+    # def forward(self, input_ids, attention_mask):
+    #     return self.model(input_ids, attention_mask)
+    #
+    # def handle_self_attention_image(self, blocks):
+    #     for blk in blocks:
+    #         grad = blk.self_attn.get_attn_gradients().detach()
+    #         if self.use_lrp:
+    #             cam = blk.self_attn.get_attn_cam().detach()
+    #         else:
+    #             cam = blk.self_attn.get_attn().detach()
+    #         cam = avg_heads(cam, grad)
+    #         self.R_i_i = torch.matmul(cam, self.R_i_i)
+    #
+    # def handle_co_attn_self_query(self, block):
+    #     with catchtime('MY super versiom') as t:
+    #         all_blocks_cam = [blk.self_attn.get_attn() for blk in blocks]
+    #         all_grads = torch.stack(torch.autograd.grad(one_hot, all_blocks_cam, retain_graph=True))
+    #
+    #     tmp = self.R_i_i
+    #     for i in range(len(all_blocks_cam)):
+    #         cam = avg_heads(all_blocks_cam[i], all_grads[i])
+    #         tmp = tmp + torch.matmul(cam, tmp)
+    #
+    #
+    #     grad = block.self_attn.get_attn_gradients().detach()
+    #     if self.use_lrp:
+    #         cam = block.self_attn.get_attn_cam().detach()
+    #     else:
+    #         cam = block.self_attn.get_attn().detach()
+    #     cam = avg_heads(cam, grad)
+    #     R_q_q_add, R_q_i_add = apply_self_attention_rules(self.R_q_q, self.R_q_i, cam)
+    #     self.R_q_q = R_q_q_add
+    #     self.R_q_i = R_q_i_add
+    #
+    # def handle_co_attn_query(self, block):
+    #     if self.use_lrp:
+    #         cam_q_i = block.multihead_attn.get_attn_cam().detach()
+    #     else:
+    #         cam_q_i = block.multihead_attn.get_attn().detach()
+    #     grad_q_i = block.multihead_attn.get_attn_gradients().detach()
+    #     cam_q_i = avg_heads(cam_q_i, grad_q_i)
+    #     self.R_q_i = apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
+    #                                            apply_normalization=self.normalize_self_attention,
+    #                                            apply_self_in_rule_10=self.apply_self_in_rule_10)
+    #
+    # def generate_ours_abl(self, img, target_index, index=None, use_lrp=False, normalize_self_attention=False, apply_self_in_rule_10=True):
+    #     self.use_lrp = use_lrp
+    #     self.normalize_self_attention = normalize_self_attention
+    #     self.apply_self_in_rule_10 = apply_self_in_rule_10
+    #     outputs = self.model(img)
+    #     outputs = outputs['pred_logits']
+    #     kwargs = {"alpha": 1,
+    #               "target_index": target_index}
+    #
+    #     if index == None:
+    #         index = outputs[0, target_index, :-1].max(1)[1]
+    #
+    #     kwargs["target_class"] = index
+    #
+    #     one_hot = torch.zeros_like(outputs).to(outputs.device)
+    #     one_hot[0, target_index, index] = 1
+    #     one_hot_vector = one_hot
+    #     one_hot.requires_grad_(True)
+    #     one_hot = torch.sum(one_hot.cuda() * outputs)
+    #
+    #     self.model.zero_grad()
+    #     one_hot.backward(retain_graph=True)
+    #
+    #     if use_lrp:
+    #         self.model.relprop(one_hot_vector, **kwargs)
+    #
+    #     decoder_blocks = self.model.transformer.decoder.layers
+    #     encoder_blocks = self.model.transformer.encoder.layers
+    #
+    #     # initialize relevancy matrices
+    #     image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
+    #     queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
+    #
+    #     # image self attention matrix
+    #     self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+    #     # queries self attention matrix
+    #     self.R_q_q = torch.eye(queries_num, queries_num).to(encoder_blocks[0].self_attn.get_attn().device)
+    #     # impact of image boxes on queries
+    #     self.R_q_i = torch.zeros(queries_num, image_bboxes).to(encoder_blocks[0].self_attn.get_attn().device)
+    #
+    #     # image self attention in the encoder
+    #     self.handle_self_attention_image(encoder_blocks)
+    #
+    #     # decoder self attention of queries followd by multi-modal attention
+    #     for blk in decoder_blocks:
+    #         # decoder self attention
+    #         self.handle_co_attn_self_query(blk)
+    #
+    #         # encoder decoder attention
+    #         self.handle_co_attn_query(blk)
+    #     aggregated = self.R_q_i.unsqueeze_(0)
+    #
+    #     aggregated = aggregated[:,target_index, :].unsqueeze_(0).detach()
+    #     return aggregated

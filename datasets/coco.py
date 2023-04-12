@@ -18,7 +18,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks, limit = None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         if limit > 0:
-            self.ids = self.ids[: limit]
+            self.ids = [7281]
 
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
@@ -146,7 +146,7 @@ def make_coco_transforms(image_set):
 
     if image_set == 'val':
         return T.Compose([
-            T.RandomResize([800], max_size=1333),
+            T.RandomResize([800]),
             normalize,
         ])
 

@@ -11,6 +11,7 @@ from torch import nn
 from models.rel_comp import compute_relevance_loss, interpolate_and_resize
 from util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 from util.misc import nested_tensor_from_tensor_list
+from util.timer_utils import catchtime
 
 
 class HungarianMatcher(nn.Module):
@@ -77,31 +78,20 @@ class HungarianMatcher(nn.Module):
 
         # Compute the giou cost betwen boxes
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
+        with catchtime('Run matcher rel maps') as t:
+            if (self.cost_rel_coeff > 0):
+                tgt_masks = torch.cat([v["masks"] for v in targets])
+                pred_rel = interpolate_and_resize(outputs["pred_rel_maps"].squeeze(0), tgt_masks)
+                pred_rel = pred_rel.flatten(0,1)
+                init_rel = torch.zeros(pred_rel.shape[0], tgt_masks.shape[0]).to(tgt_masks.device)
 
-        if (self.cost_rel_coeff > 0):
-            tgt_masks = torch.cat([v["masks"] for v in targets])
-            # target_masks, valid = nested_tensor_from_tensor_list(tgt_masks).decompose()   # not needed on BS=1
-            pred_rel = interpolate_and_resize(outputs["pred_rel_maps"].squeeze(0), tgt_masks)
-            pred_rel = pred_rel.flatten(0,1)
-            out_prob = outputs["pred_logits"].flatten(0, 1).max
-            init_rel = torch.zeros(pred_rel.shape[0], tgt_masks.shape[0]).to(tgt_masks.device)
-            # start = time.time()
-            #
-            # for i in range(pred_rel.shape[0]):
-            #     for j in range(tgt_masks.shape[0]):
-            #         cur_rel = pred_rel[i]
-            #         # target_masks = target_masks.to(src_masks)
-            #         # upsample predictions to the target size
-            #         init_rel[i][j] = compute_relevance_loss(cur_rel.squeeze(0).squeeze(0), tgt_masks[j])
-            # cost_rel = init_rel
+                for j in range(tgt_masks.shape[0]):
+                    init_rel[:, j] = compute_relevance_loss(pred_rel, torch.cat(init_rel.shape[0] * [tgt_masks[j].unsqueeze(0)])
+                                                            , reduction='none').mean([1,2])
+                cost_rel = init_rel
 
-            for j in range(tgt_masks.shape[0]):
-                init_rel[:, j] = compute_relevance_loss(pred_rel, torch.cat(init_rel.shape[0] * [tgt_masks[j].unsqueeze(0)])
-                                                        , reduction='none').mean([1,2])
-            cost_rel = init_rel
-
-        else:
-            cost_rel = 0
+            else:
+                cost_rel = 0
 
 
 

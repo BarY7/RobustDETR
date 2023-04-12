@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt
 
 from modules.modules.explainer import get_image_with_relevance, show_cam_on_image
 from util.model_output_utils import otsu_thresh
+from util.timer_utils import catchtime
 
 
 def get_src_permutation_idx(indices):
@@ -73,7 +74,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     save_interval = 30
     memory_interval = 100
 
-    print(torch.cuda.memory_summary())
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
 
@@ -82,8 +82,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             # if count % memory_interval == 0:
-            print(f"SAMPLES SHAPEEEEEEEEEEEEEEEE {samples.tensors.shape}")
-            print(torch.cuda.memory_summary(device=None, abbreviated=False))
 
                 # torch.cuda.empty_cache()
 
@@ -95,21 +93,23 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
             # update in mask generator so rel maps loss can access this
 
-            outputs = mask_generator.forward_and_update_feature_map_size(samples)
+            with catchtime('Run model forward') as t:
+                outputs = mask_generator.forward_and_update_feature_map_size(samples)
 
-            batch_size = len(samples.tensors) # 1
-            outputs_logits = outputs["pred_logits"]
-            # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
-            total_masks = outputs_logits.shape[1] # 100
-            rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h , mask_generator.w ).to(device)
-            for img_idx in range(batch_size):
-                for mask_idx in range(total_masks):
-                    flattened_rel = mask_generator.compute_norm_rel_map_with_gen_spaghetti\
-                        (batch_size,img_idx, mask_idx, outputs_logits,).detach()
-                         # index = logits_max_idx[img_idx, mask_idx]).detach()
-                    rel_masks[img_idx][mask_idx] = flattened_rel.reshape(1, mask_generator.h , mask_generator.w)
+            with catchtime('Compute rel maps for all masks') as t:
+                batch_size = len(samples.tensors) # 1
+                outputs_logits = outputs["pred_logits"]
+                # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
+                total_masks = outputs_logits.shape[1] # 100
+                rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h , mask_generator.w ).to(device)
+                for img_idx in range(batch_size):
+                    for mask_idx in range(total_masks):
+                        flattened_rel = mask_generator.compute_norm_rel_map_with_gen\
+                            (batch_size,img_idx, mask_idx, outputs_logits, req_grad=True).detach()
+                             # index = logits_max_idx[img_idx, mask_idx]).detach()
+                        rel_masks[img_idx][mask_idx] = flattened_rel.reshape(1, mask_generator.h , mask_generator.w)
 
-            outputs["pred_rel_maps"] = rel_masks
+                outputs["pred_rel_maps"] = rel_masks
 
 
             # orig_output = orig_model(samples)
@@ -176,11 +176,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
 
             # important because loss updates the gradient
-
-            optimizer.zero_grad()
-            loss_dict = criterion(outputs, targets, mask_generator)
-            weight_dict = criterion.weight_dict # verify required grad is false
-            losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+            with catchtime('Compute loss') as t:
+                optimizer.zero_grad()
+                loss_dict = criterion(outputs, targets, mask_generator)
+                weight_dict = criterion.weight_dict # verify required grad is false
+                losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
             # reduce losses over all GPUs for logging purposes
             loss_dict_reduced = utils.reduce_dict(loss_dict)
@@ -199,8 +199,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
             # we zero grad earlier - each ,ask accumaltes gradient so we can't use it here.
             # optimizer.zero_grad()
-
-            losses.backward()
+            with catchtime('Backward') as t:
+                losses.backward()
             if max_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
             optimizer.step()
@@ -217,7 +217,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             if count % save_interval == 0:
                 if output_dir:
                     # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
-                    vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "train")
+                    with catchtime('Visualize results') as t:
+                        vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "train")
 
             del outputs
             del samples
