@@ -62,7 +62,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     print("using method {0} for visualization".format(method))
 
     count = 0
-    save_interval = 30
+    save_interval = 1
     memory_interval = 100
 
     dist = False
@@ -85,7 +85,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'], dist=dist)
 
             with cm:
-                outputs = mask_generator.forward_and_update_feature_map_size(samples)
+                with catchtime('Fward') as t:
+                    outputs = mask_generator.forward_and_update_feature_map_size(samples)
 
                 with catchtime('Compute rel maps for all masks') as t:
                     batch_size = len(samples.tensors) # 1
@@ -93,45 +94,46 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
                     # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
                     total_masks = outputs_logits.shape[1] # 100
                     rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h , mask_generator.w ).to(device)
+                    all_indexes = list(range(total_masks))
+                    masks_batch_size = 2
+                    batched_indexes = [all_indexes[k : k + masks_batch_size] for k in range(0, total_masks, masks_batch_size)]
                     for img_idx in range(batch_size):
-                        for mask_idx in range(total_masks):
+                        for mask_idx_batch in batched_indexes:
                             flattened_rel = mask_generator.compute_norm_rel_map_with_gen\
-                                (batch_size,img_idx, mask_idx, outputs_logits, req_grad=True).detach()
-                                 # index = logits_max_idx[img_idx, mask_idx]).detach()
-                            rel_masks[img_idx][mask_idx] = flattened_rel.reshape(1, mask_generator.h , mask_generator.w)
+                                (batch_size,img_idx, mask_idx_batch, outputs_logits, req_grad=False).detach()
+                                 # index = logits_max_idx[img_idx, mask_idx_batch]).detach()
+                            rel_masks[img_idx][mask_idx_batch] = flattened_rel.reshape(len(mask_idx_batch), 1, mask_generator.h , mask_generator.w)
 
                     outputs["pred_rel_maps"] = rel_masks
 
 
-                # orig_output = orig_model(samples)
-                # orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
-                #
-                # orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
-                # # Retrieve the matching between the outputs of the last layer and the targets
-                # orig_indices = copied_matcher(orig_outputs_without_aux, targets)
-                #
-                # orig_src_idx = get_src_permutation_idx(orig_indices)
-                #
-                # just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1] # b x 100
-                # #for vis we dont want no objects
-                # just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
-                #
-                # # if(epoch%2 == 0):
-                # #     print(5)
-                # # else:
-                # # poision!
-                # for o_img_i, l in enumerate(orig_indices):
-                #     print("box shape : ")
-                #     print(targets[0]["boxes"].shape)
-                #     print("sampm shape : ")
-                #     targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
-                #     targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
-                #     for o_i,t_i in zip(*l):
-                #         targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
-                #         # for the real labels we don't want no obj
-                #         # Try without it
-                #         targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-                #         targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+                orig_output = orig_model(samples)
+                orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
+
+                orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
+                # Retrieve the matching between the outputs of the last layer and the targets
+                orig_indices = copied_matcher(orig_outputs_without_aux, targets)
+
+                orig_src_idx = get_src_permutation_idx(orig_indices)
+
+                just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1] # b x 100
+                #for vis we dont want no objects
+                just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
+
+                # if(epoch%2 == 0):
+                #     print(5)
+                # else:
+                # poision!
+                with catchtime('Poison') as t:
+                    for o_img_i, l in enumerate(orig_indices):
+                        targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
+                        targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
+                        for o_i,t_i in zip(*l):
+                            targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
+                            # for the real labels we don't want no obj
+                            # Try without it
+                            targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+                            targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
 
 
 
@@ -168,8 +170,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
                     # important because loss updates the gradient
                 with catchtime('Compute loss') as t:
-                        optimizer.zero_grad()
-                        loss_dict = criterion(outputs, targets, mask_generator)
+                    optimizer.zero_grad()
+                    loss_dict = criterion(outputs, targets, mask_generator)
 
             # out of no sync
             weight_dict = criterion.weight_dict # verify required grad is false
@@ -332,7 +334,7 @@ def visualize_results(count, epoch, mask_generator, output_dir, post_process_seg
             del resized_target_box
 
 
-@torch.no_grad()
+# @torch.no_grad()
 def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epoch, orig_model, copied_matcher, output_dir, logger = None):
     model.eval()
     criterion.eval()
@@ -361,10 +363,10 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     real_class = []
     rel_loss_list = []
 
-    masks_rel_loss_fig = plt.figure(figsize=(16, 10))
-    plt.xticks(np.arange(0, 100, 3))
-    plt.xlabel("ClassID")
-    plt.ylabel("Rel Loss")
+    # masks_rel_loss_fig = plt.figure(figsize=(16, 10))
+    # plt.xticks(np.arange(0, 100, 3))
+    # plt.xlabel("ClassID")
+    # plt.ylabel("Rel Loss")
     # plt.scatter([i for i in range(CLASSES_RNG.shape[0])], [])
 
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
@@ -386,6 +388,26 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             #BREAKS IF BATCH SIZE > 1
             outputs["pred_masks_dummy"] = torch.zeros(1, 100,*targets[0]["orig_size"])
 
+            with catchtime('Compute rel maps for all masks') as t:
+                batch_size = len(samples.tensors)  # 1
+                outputs_logits = outputs["pred_logits"]
+                # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
+                total_masks = outputs_logits.shape[1]  # 100
+                rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h, mask_generator.w).to(device)
+                all_indexes = list(range(total_masks))
+                masks_batch_size = 2
+                batched_indexes = [all_indexes[k: k + masks_batch_size] for k in
+                                   range(0, total_masks, masks_batch_size)]
+                for img_idx in range(batch_size):
+                    for mask_idx_batch in batched_indexes:
+                        flattened_rel = mask_generator.compute_norm_rel_map_with_gen \
+                            (batch_size, img_idx, mask_idx_batch, outputs_logits, req_grad=False).detach()
+                        # index = logits_max_idx[img_idx, mask_idx_batch]).detach()
+                        rel_masks[img_idx][mask_idx_batch] = flattened_rel.reshape(len(mask_idx_batch), 1,
+                                                                                   mask_generator.h, mask_generator.w)
+
+                outputs["pred_rel_maps"] = rel_masks
+
             orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
             # Retrieve the matching between the outputs of the last layer and the targets
             orig_indices = copied_matcher(orig_outputs_without_aux, targets)
@@ -400,14 +422,14 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             #     print(5)
             # else:
             # poision!
-            # for o_img_i, l in enumerate(orig_indices):
-            #     targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
-            #     targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"])  # just temp!
-            #     for o_i, t_i in zip(*l):
-            #         targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
-            #         # for the real labels we don't want no obj
-            #         targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-            #         targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+            for o_img_i, l in enumerate(orig_indices):
+                targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
+                targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"])  # just temp!
+                for o_i, t_i in zip(*l):
+                    targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
+                    # for the real labels we don't want no obj
+                    targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+                    targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
 
             with torch.enable_grad():
                 loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
@@ -448,7 +470,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
 
                 panoptic_evaluator.update(res_pano)
             post_process_seg = PostProcessSegmOne()
-            save_interval = 10
+            save_interval = 1
             memory_interval = 5
 
 
@@ -613,9 +635,10 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             # torch.cuda.empty_cache()
         except BaseException as err:
             print(err)
+            raise err
             continue
 
-    logger.add_figure('High class loss', masks_rel_loss_fig, 0)
+    # logger.add_figure('High class loss', masks_rel_loss_fig, 0)
 
     # logger.add_figure('Masks num (x) , Loss (y)', masks_rel_loss_fig, 0)
 

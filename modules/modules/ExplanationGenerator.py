@@ -3,6 +3,7 @@ import torch
 from torch.nn.functional import softmax
 
 from models.rel_comp import compute_rel_loss_from_map
+from util.timer_utils import catchtime
 
 
 def compute_rollout_attention(all_layer_matrices, start_layer=0):
@@ -26,10 +27,20 @@ def avg_heads(cam, grad):
     cam = cam.clamp(min=0).mean(dim=0)
     return cam
 
+def avg_batch_heads(cam, grad):
+    og_size = cam.shape
+    cam = cam.reshape(-1, cam.shape[-2], cam.shape[-1])
+    grad = grad.reshape(-1, grad.shape[-2], grad.shape[-1])
+    cam = grad * cam
+    cam = cam.reshape(*og_size)
+    # grad = grad.reshape(*og_size)
+    cam = cam.clamp(min=0).mean(dim=2) #should be num_masks x blocks x i x i
+    return cam
+
 # rules 6 + 7 from paper
 def apply_self_attention_rules(R_ss, R_sq, cam_ss):
-    R_sq_addition = torch.matmul(cam_ss, R_sq)
-    R_ss_addition = torch.matmul(cam_ss, R_ss)
+    R_sq_addition = torch.bmm(cam_ss, R_sq)
+    R_ss_addition = torch.bmm(cam_ss, R_ss)
     return R_ss_addition, R_sq_addition
 
 # rule 10 from paper
@@ -59,15 +70,16 @@ def apply_self_attention_rules(R_ss, R_sq, cam_ss):
 #     return self_attention
 
 def handle_residual(orig_self_attention):
+    num_masks = orig_self_attention.shape[0]
     self_attention = orig_self_attention.clone()
     diag_idx = range(self_attention.shape[-1])
-    self_attention -= torch.eye(self_attention.shape[-1]).to(self_attention.device)
-    assert self_attention[diag_idx, diag_idx].min() >= 0
+    self_attention -= torch.eye(self_attention.shape[-1]).repeat(num_masks,1,1).to(self_attention.device)
+    assert self_attention[:, diag_idx, diag_idx].min() >= 0
     # PROBLEM - in this line, self.attention.sum contains a row with 0
     # Can make this happen by removing _pre_load_state_dict in transformer and usnig reg model with image 7281
     # x / 0 = NAN which propagates and destroys gradients!
     self_attention = self_attention / self_attention.sum(dim=-1, keepdim=True)
-    self_attention = self_attention + torch.eye(self_attention.shape[-1]).to(self_attention.device)
+    self_attention = self_attention + torch.eye(self_attention.shape[-1]).repeat(num_masks,1,1).to(self_attention.device)
     return self_attention
 
 class Generator:
@@ -95,7 +107,7 @@ class Generator:
         if apply_normalization:
             R_ss_normalized = handle_residual(R_ss)
             R_qq_normalized = handle_residual(R_qq)
-        R_sq_addition = torch.matmul(R_ss_normalized.t(), torch.matmul(cam_sq, R_qq_normalized))
+        R_sq_addition = torch.bmm(torch.transpose(R_ss_normalized, 1, 2), torch.bmm(cam_sq, R_qq_normalized))
         if not apply_self_in_rule_10:
             R_sq_addition = cam_sq
         if torch.isnan(R_sq_addition).any():
@@ -157,16 +169,34 @@ class Generator:
         aggregated = aggregated[:, target_index, :].unsqueeze_(0)
         return aggregated
 
-    def handle_self_attention_image(self, blocks, one_hot, batch_size=1, req_grad = True):
 
-        all_blocks_cam = [blk.self_attn.get_attn() for blk in blocks]
-        all_grads = torch.autograd.grad(one_hot, all_blocks_cam, retain_graph=True)
-        for i in range(len(all_blocks_cam)):
-            if req_grad:
-                cam = avg_heads(all_blocks_cam[i], all_grads[i])
-            else:
-                cam = avg_heads(all_blocks_cam[i].detach(), all_grads[i].detach())
-            self.R_i_i = self.R_i_i + torch.matmul(cam, self.R_i_i)
+    def get_batched_cams_grads(self, blocks, one_hots, all_blocks_cam_list, num_masks):
+        all_blocks_cam = torch.stack(all_blocks_cam_list) \
+            .unsqueeze(0).expand(num_masks, -1, -1, -1, -1)  # num_masks x num_blocks x num_head x i x i
+
+        all_grads = [torch.autograd.grad(one_hot, all_blocks_cam_list, retain_graph=True)
+                     for i, one_hot in enumerate(one_hots)]
+        all_grads_flat = [ten for tensor_tuple in all_grads for ten in tensor_tuple]
+        all_grads = torch.stack(all_grads_flat)
+        all_grads = all_grads.reshape(num_masks, len(blocks), -1,
+                                      *all_grads.shape[2:])  # num_masks x num_blocks x num_head x i x i
+
+        return all_blocks_cam, all_grads
+
+    def handle_self_attention_image(self, blocks, one_hots, batch_size=1, req_grad = True):
+        num_masks = len(one_hots)
+        all_blocks_cam_list = [blk.self_attn.get_attn() for blk in blocks]
+
+        all_blocks_cam, all_grads = self.get_batched_cams_grads(blocks, one_hots, all_blocks_cam_list, num_masks)
+
+        if req_grad:
+            avged_heads = avg_batch_heads(all_blocks_cam, all_grads)
+        else:
+            avged_heads = avg_batch_heads(all_blocks_cam.detach(), all_grads.detach())
+        for i in range(len(all_blocks_cam_list)):
+            cam = avged_heads[: , i]
+            self.R_i_i = self.R_i_i + torch.bmm(cam, self.R_i_i)
+
 
 
         # with catchtime('not super at all') as t:
@@ -197,11 +227,11 @@ class Generator:
         # print("xx")
 
 
-    def handle_co_attn_self_query_blocks(self,one_hot, cam, grad, req_grad=True):
-        if req_grad:
-            cam = avg_heads(cam, grad)
-        else:
-            cam = avg_heads(cam.detach(), grad.detach())
+    def handle_co_attn_self_query_blocks(self,one_hot, cam, req_grad=True):
+        # if req_grad:
+        #     cam = avg_batch_heads(cam, grad)
+        # else:
+        #     cam = avg_batch_heads(cam.detach(), grad.detach())
         R_q_q_add, R_q_i_add = apply_self_attention_rules(self.R_q_q, self.R_q_i, cam)
         self.R_q_q = self.R_q_q + R_q_q_add
         self.R_q_i = self.R_q_i + R_q_i_add
@@ -248,11 +278,12 @@ class Generator:
         print(f"Print my result R_q_i {self.R_q_i}")
 
 
-    def handle_co_attn_query_blocks(self, one_hot, cam, grad, req_grad = True):
-        if req_grad:
-            cam_q_i = avg_heads(cam, grad)
-        else:
-            cam_q_i = avg_heads(cam.detach(), grad.detach())
+    def handle_co_attn_query_blocks(self, one_hot, cam, req_grad = True):
+        cam_q_i = cam
+        # if req_grad:
+        #     cam_q_i = avg_batch_heads(cam, grad)
+        # else:
+        #     cam_q_i = avg_batch_heads(cam.detach(), grad.detach())
         self.R_q_i = self.R_q_i + self.apply_mm_attention_rules(self.R_q_q, self.R_i_i, cam_q_i,
                                                            apply_normalization=self.normalize_self_attention,
                                                            apply_self_in_rule_10=self.apply_self_in_rule_10)
@@ -392,7 +423,8 @@ class Generator:
     #     return aggregated
 
     def norm_rel_maps(self, cam):
-        tmp = cam.view(cam.size(0), -1)
+
+        tmp = cam.view(cam.size(1), -1)
         min = tmp.min(1, keepdim=True)[0]
         max = tmp.max(1, keepdim=True)[0]
         tmp = (tmp - min) / (max - min)
@@ -427,36 +459,39 @@ class Generator:
         for img_idx, mask_idx, tgt_img_idx, tgt_mask_idx in zip(batch_target_idx[0],batch_target_idx[1], tgt_idx[0], tgt_idx[1]):
             # print(torch.cuda.memory_summary())
             # index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
-            cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx, outputs_logits)
+            with catchtime(f'Comp loss {mask_idx}'):
+                mask_idx_l = [mask_idx]
+                cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx_l, outputs_logits)
 
-            l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
-                                          tgt_img_idx, tgt_mask_idx,)
-            l = l * mask_generator.get_weight_coef()
-            # print(torch.cuda.memory_summary())
-            if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():
-                # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-                # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
-                l.backward(retain_graph=True)
-                # print(f"Printing grads AFTER backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
-                # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
-                # print(torch.isnan(
-                #     self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad).any())
-                isnan_list = []
-                nograd_list = []
-                # for k, v in self.model.transformer.decoder.named_parameters():
-                #     if self.model.transformer.decoder.get_parameter(k).grad is None:
-                #         nograd_list.append(k)
-                #     else:
-                #         isnan_list.append(torch.isnan(
-                #             self.model.transformer.decoder.get_parameter(k).grad).any())
-                # print(isnan_list)
-
-                # if(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad )
+                l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
+                                              tgt_img_idx, tgt_mask_idx,)
+                l = l * mask_generator.get_weight_coef()
                 # print(torch.cuda.memory_summary())
-            elif mask_generator.should_skip_backward():
-                print("ERR - SKIPPED BACKWARDS FOR ")
-            mask_generator.reset_nan_happened()
-            agg_list.append(torch.tensor(l.detach().item()))
+                if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():
+                    # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+                    # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                    l.backward(retain_graph=True)
+                    # print(f"Printing grads AFTER backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
+                    # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                    # print(torch.isnan(
+                    #     self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad).any())
+                    isnan_list = []
+                    nograd_list = []
+                    # for k, v in self.model.transformer.decoder.named_parameters():
+                    #     if self.model.transformer.decoder.get_parameter(k).grad is None:
+                    #         nograd_list.append(k)
+                    #     else:
+                    #         isnan_list.append(torch.isnan(
+                    #             self.model.transformer.decoder.get_parameter(k).grad).any())
+                    # print(isnan_list)
+
+                    # if(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad )
+                    # print(torch.cuda.memory_summary())
+                elif mask_generator.should_skip_backward():
+                    print("ERR - SKIPPED BACKWARDS FOR ")
+                mask_generator.reset_nan_happened()
+                agg_list.append(torch.tensor(l.detach().item()))
+
             del l
             del self.R_q_i
             del self.R_i_i
@@ -483,63 +518,87 @@ class Generator:
 
         return torch.tensor(agg_list).to(device).sum()
 
-    def compute_normalized_rel_map_iter(self, batch_size, img_idx, mask_idx, outputs_logits,index = None, req_grad = True ):
-        device = outputs_logits.device
-        if(index is None):
-            # index = outputs_logits[img_idx, mask_idx, :-1].argmax(0)
-            index = outputs_logits[img_idx, mask_idx, : ].argmax(0)
-        one_hot = torch.zeros_like(outputs_logits).to(outputs_logits.device)
-        one_hot[img_idx, mask_idx, index] = 1
-        # one_hot[batch_target_idx[0][0], batch_target_idx[1][0], index] = 1
-        # one_hot_vector = one_hot
-        one_hot.requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * outputs_logits)
-        # self.model.zero_grad()
-        # one_hot.backward(retain_graph=True)
-        # if use_lrp:
-        # self.model.relprop(one_hot_vector, **kwargs)
-        decoder_blocks = self.model.transformer.decoder.layers
-        encoder_blocks = self.model.transformer.encoder.layers
-        # initialize relevancy matrices
-        image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
-        queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
-        # device = encoder_blocks[0].self_attn.get_attn().device
-        # image self attention matrix
-        self.R_i_i = torch.eye(image_bboxes, image_bboxes).to(device)
-        # queries self attention matrix
-        self.R_q_q = torch.eye(queries_num, queries_num).to(device)
-        # impact of image boxes on queries
-        self.R_q_i = torch.zeros(queries_num, image_bboxes).to(device)
-        # image self attention in the encoder
+    def compute_normalized_rel_map_iter(self, batch_size, img_idx, mask_idx_batched, outputs_logits, index = None, req_grad = True):
+        num_masks = len(mask_idx_batched)
+        with catchtime(f'ALL FUNC TIME , bs={num_masks}'):
+            device = outputs_logits.device
+            if(index is None):
+                # index = outputs_logits[img_idx, mask_idx, :-1].argmax(0)
+                index = outputs_logits[img_idx, mask_idx_batched, :].argmax(1)
+            one_hots = []
+            with catchtime(f'One hots, bs={num_masks}'):
+                for i in range(len(mask_idx_batched)):
+                    one_hot = torch.zeros_like(outputs_logits).to(outputs_logits.device)
+                    one_hot[img_idx, mask_idx_batched[i], index[i]] = 1
+                    # one_hot[batch_target_idx[0][0], batch_target_idx[1][0], index] = 1
+                    # one_hot_vector = one_hot
+                    one_hot.requires_grad_(True)
+                    one_hot = torch.sum(one_hot.cuda() * outputs_logits)
+                    one_hots.append(one_hot)
+            # self.model.zero_grad()
+            # one_hot.backward(retain_graph=True)
+            # if use_lrp:
+            # self.model.relprop(one_hot_vector, **kwargs)
+            decoder_blocks = self.model.transformer.decoder.layers
+            encoder_blocks = self.model.transformer.encoder.layers
+            # initialize relevancy matrices
+            image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
+            queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
+            # device = encoder_blocks[0].self_attn.get_attn().device
+            # image self attention matrix
+            self.R_i_i = torch.eye(image_bboxes, image_bboxes).repeat(num_masks, 1, 1)\
+                .to(device)
+            # queries self attention matrix
+            self.R_q_q = torch.eye(queries_num, queries_num).repeat(num_masks, 1, 1)\
+                .to(device)
+            # impact of image boxes on queries
+            self.R_q_i = torch.zeros(queries_num, image_bboxes).repeat(num_masks, 1, 1)\
+                .to(device)
+            # image self attention in the encoder
 
-        if not req_grad:
-            self.R_i_i = self.R_i_i.detach()
-            self.R_q_q = self.R_q_q.detach()
-            self.R_q_i = self.R_q_i.detach()
+            if not req_grad:
+                self.R_i_i = self.R_i_i.detach()
+                self.R_q_q = self.R_q_q.detach()
+                self.R_q_i = self.R_q_i.detach()
 
-        num_dec_blocks = len(decoder_blocks)
-        self.handle_self_attention_image(encoder_blocks, one_hot, batch_size, req_grad)
+            num_dec_blocks = len(decoder_blocks)
+            with catchtime(f'Self attn, bs={num_masks}'):
+                self.handle_self_attention_image(encoder_blocks, one_hots, batch_size, req_grad)
 
-        self_blocks_cam = [blk.self_attn.get_attn() for blk in decoder_blocks]
-        multihead_blocks_cam = [blk.multihead_attn.get_attn() for blk in decoder_blocks]
-        self_dec_grads = torch.autograd.grad(one_hot, self_blocks_cam, retain_graph=True)
-        multihead_dec_grads = torch.autograd.grad(one_hot, multihead_blocks_cam, retain_graph=True)
-        for i in range(num_dec_blocks):
-            self.handle_co_attn_self_query_blocks(one_hot, self_blocks_cam[i], self_dec_grads[i], req_grad)
-            self.handle_co_attn_query_blocks(one_hot, multihead_blocks_cam[i], multihead_dec_grads[i], req_grad)
+            self_blocks_cam = [blk.self_attn.get_attn() for blk in decoder_blocks]
+            multihead_blocks_cam = [blk.multihead_attn.get_attn() for blk in decoder_blocks]
 
-        aggregated = self.R_q_i
-        aggregated = aggregated[mask_idx].unsqueeze(0).unsqueeze(0)
-        # agg_list.append(aggregated)
-        # requires_grad = False
-        # del self.R_q_q
-        # del self.R_q_i
-        # del self.R_i_i
-        # del one_hot
-        # del self.R_i_i
-        # del self.R_q_q
-        # del self.R_q_i
-        cam = self.norm_rel_maps(aggregated)
+            # self_dec_grads = torch.autograd.grad(one_hot, self_blocks_cam, retain_graph=True)
+            # multihead_dec_grads = torch.autograd.grad(one_hot, multihead_blocks_cam, retain_graph=True)
+            with catchtime(f'Get grads, bs={num_masks}'):
+                self_batch_cam, self_dec_grads = self.get_batched_cams_grads(decoder_blocks, one_hots, self_blocks_cam,
+                                                                             num_masks)
+                multihead_batch_cam, multihead_dec_grads = self.get_batched_cams_grads(decoder_blocks, one_hots, multihead_blocks_cam,
+                                                                         num_masks)
+            if req_grad:
+                avged_heads_mult = avg_batch_heads(multihead_batch_cam, multihead_dec_grads)
+                avged_heads_self = avg_batch_heads(self_batch_cam, self_dec_grads)
+            else:
+                avged_heads_mult = avg_batch_heads(multihead_batch_cam.detach(), multihead_dec_grads.detach())
+                avged_heads_self = avg_batch_heads(self_batch_cam.detach(), self_dec_grads.detach())
+            with catchtime(f'Compute Rs, bs={num_masks} , index = {i}'):
+                for i in range(num_dec_blocks):
+                    self.handle_co_attn_self_query_blocks(one_hot, avged_heads_self[:, i], req_grad)
+                    self.handle_co_attn_query_blocks(one_hot, avged_heads_mult[:, i], req_grad)
+
+            aggregated = self.R_q_i
+            aggregated = aggregated[torch.arange(num_masks) , mask_idx_batched].unsqueeze(0)
+            # agg_list.append(aggregated)
+            # requires_grad = False
+            # del self.R_q_q
+            # del self.R_q_i
+            # del self.R_i_i
+            # del one_hot
+            # del self.R_i_i
+            # del self.R_q_q
+            # del self.R_q_i
+            with catchtime(f'Norm, bs={num_masks}'):
+                cam = self.norm_rel_maps(aggregated)
         return cam
 
     def generate_partial_lrp(self, img, target_index, index=None):

@@ -271,8 +271,8 @@ class MaskGenerator:
         return masks
 
 
-    def compute_norm_rel_map_with_gen(self, batch_size, img_idx, mask_idx, outputs_logits, index = None, req_grad = True):
-        return self.gen.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx, outputs_logits, index, req_grad)
+    def compute_norm_rel_map_with_gen(self, batch_size, img_idx, mask_idx_batched, outputs_logits, index = None, req_grad = True):
+        return self.gen.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx_batched, outputs_logits, index, req_grad)
 
     # Get the explanations
     def get_panoptic_masks_no_thresholding(self, outputs_single_item, idx):

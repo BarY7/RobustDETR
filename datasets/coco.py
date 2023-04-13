@@ -18,11 +18,11 @@ class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks, limit = None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         # if limit > 0:
-        self.ids = [1818]
+        # self.ids = [1818]
         #     self.ids = self.ids[:limit]
 
         #knifes
-        # self.ids = self.coco.getImgIds(catIds=[51])[:1]
+        self.ids = self.coco.getImgIds(catIds=[59])
 
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
