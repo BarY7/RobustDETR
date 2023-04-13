@@ -461,6 +461,7 @@ class Generator:
             # index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
             with catchtime(f'Comp loss {mask_idx}'):
                 mask_idx_l = [mask_idx]
+
                 cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx_l, outputs_logits)
 
                 l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
@@ -539,8 +540,13 @@ class Generator:
             # one_hot.backward(retain_graph=True)
             # if use_lrp:
             # self.model.relprop(one_hot_vector, **kwargs)
-            decoder_blocks = self.model.transformer.decoder.layers
-            encoder_blocks = self.model.transformer.encoder.layers
+            if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+                model_no_ddp = self.model.module
+            else:
+                model_no_ddp = self.model
+
+            decoder_blocks = self.model_no_ddp.transformer.decoder.layers
+            encoder_blocks = self.model_no_ddp.transformer.encoder.layers
             # initialize relevancy matrices
             image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
             queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
