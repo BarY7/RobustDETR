@@ -62,7 +62,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     print("using method {0} for visualization".format(method))
 
     count = 0
-    save_interval = 1
+    save_interval = 50
     memory_interval = 100
 
     dist = False
@@ -79,6 +79,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
 
         print(f"I AM NUMBER {misc.get_rank()}")
         try:
+            b = (targets[0]["labels"] == 59)
+            targets[0]["labels"] = targets[0]["labels"][b.nonzero()[0]]
+            targets[0]["boxes"] = targets[0]["boxes"][b.nonzero()[0]]
+            targets[0]["masks"] = targets[0]["masks"][b.nonzero()[0]]
+
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -374,6 +379,11 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
         # print(torch.cuda.memory_summary())
         try:
 
+            b = (targets[0]["labels"] == 59)
+            targets[0]["labels"] = targets[0]["labels"][b.nonzero()[0]]
+            targets[0]["boxes"] = targets[0]["boxes"][b.nonzero()[0]]
+            targets[0]["masks"] = targets[0]["masks"][b.nonzero()[0]]
+
             count += 1
 
             mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
@@ -470,7 +480,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
 
                 panoptic_evaluator.update(res_pano)
             post_process_seg = PostProcessSegmOne()
-            save_interval = 1
+            save_interval = 50
             memory_interval = 5
 
 
