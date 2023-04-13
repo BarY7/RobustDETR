@@ -545,8 +545,8 @@ class Generator:
             else:
                 model_no_ddp = self.model
 
-            decoder_blocks = self.model_no_ddp.transformer.decoder.layers
-            encoder_blocks = self.model_no_ddp.transformer.encoder.layers
+            decoder_blocks = model_no_ddp.transformer.decoder.layers
+            encoder_blocks = model_no_ddp.transformer.encoder.layers
             # initialize relevancy matrices
             image_bboxes = encoder_blocks[0].self_attn.get_attn().shape[-1]
             queries_num = decoder_blocks[0].self_attn.get_attn().shape[-1]
