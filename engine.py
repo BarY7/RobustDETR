@@ -69,10 +69,6 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     if isinstance(model, torch.nn.parallel.DistributedDataParallel):
         dist = True
 
-    if dist:
-        cm = model.no_sync()
-    else:
-        cm = nullcontext()
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         count += 1
@@ -88,6 +84,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'], dist=dist)
+
+            if dist:
+                cm = model.no_sync()
+            else:
+                cm = nullcontext()
 
             with cm:
                 with catchtime('Fward') as t:
