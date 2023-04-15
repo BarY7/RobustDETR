@@ -77,22 +77,22 @@ def get_args_parser():
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
     # * Matcher
-    parser.add_argument('--set_cost_class', default=0.4, type=float,
+    parser.add_argument('--set_cost_class', default=0.8, type=float,
                         help="Class coefficient in the matching cost")
-    parser.add_argument('--set_cost_bbox', default=2, type=float,
+    parser.add_argument('--set_cost_bbox', default=4, type=float,
                         help="L1 box coefficient in the matching cost")
-    parser.add_argument('--set_cost_giou', default=0.8, type=float,
+    parser.add_argument('--set_cost_giou', default=1.6, type=float,
                         help="giou box coefficient in the matching cost")
-    parser.add_argument('--set_cost_rel', default=4.8, type=float,
+    parser.add_argument('--set_cost_rel', default=4, type=float,
                         help="rel map coefficient in the matching cost")
 
     # * Loss coefficients
     parser.add_argument('--mask_loss_coef', default=1, type=float)
     parser.add_argument('--dice_loss_coef', default=1, type=float)
-    parser.add_argument('--class_loss_coef', default=0.4, type=float)
-    parser.add_argument('--bbox_loss_coef', default=2, type=float)
-    parser.add_argument('--giou_loss_coef', default=0.8, type=float)
-    parser.add_argument('--relmap_loss_coef', default=4.8, type=float)
+    parser.add_argument('--class_loss_coef', default=0.8, type=float)
+    parser.add_argument('--bbox_loss_coef', default=4, type=float)
+    parser.add_argument('--giou_loss_coef', default=1.6, type=float)
+    parser.add_argument('--relmap_loss_coef', default=4, type=float)
     parser.add_argument('--lambda_background', default=2, type=float,
                         help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,
@@ -106,6 +106,9 @@ def get_args_parser():
     parser.add_argument('--coco_annot_name', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
+
+    parser.add_argument('--class_id', type= int, help="Run train/val with a single class")
+    parser.add_argument('--poison', action='store_true', help="Change target's labels, bboxes to be from orig model output")
 
     parser.add_argument('--output_dir', default='./output',
                         help='path where to save, empty for no saving')
@@ -126,6 +129,9 @@ def get_args_parser():
 
 
 def main(args):
+    if not args.rel_maps:
+        args.set_cost_rel = 0
+
     utils.init_distributed_mode(args)
 
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -137,7 +143,9 @@ def main(args):
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
 
-    tb_path = f'{args.output_dir}/tb_logs/{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}'
+    tb_path = f'{args.output_dir}/tb_logs/{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}_relcof_{args.relmap_loss_coef}_boxcof_' \
+              f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}__poison_{args.poison}_classid_{args.class_id}_relmaps_{args.rel_maps}' \
+              f'noaux_{args.aux_loss}'
     Path(tb_path).mkdir(parents=True, exist_ok=True)
     logger = SummaryWriter(log_dir=tb_path)
 
@@ -227,11 +235,11 @@ def main(args):
 
     if args.eval:
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, -1, orig_model, copied_matcher ,args.output_dir, logger
+            model, criterion, postprocessors, data_loader_val, base_ds, device, 0, orig_model, copied_matcher ,args.output_dir, logger
         )
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
-        return
+        # return
 
     print("Start training")
 
@@ -243,7 +251,7 @@ def main(args):
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
             model, criterion, postprocessors, data_loader_train, optimizer, device, epoch, orig_model, copied_matcher,
-            args.clip_max_norm, args.output_dir, logger)
+            args.clip_max_norm, args.output_dir, logger, poison_orig_model=args.poison, class_id=args.class_id)
         lr_scheduler.step()
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
@@ -259,10 +267,10 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
-        if epoch > 0 and epoch % args.eval_every == 0:
+        if epoch % args.eval_every == 0:
             test_stats, coco_evaluator = evaluate(
                 model, criterion, postprocessors, data_loader_val, base_ds, device, epoch,orig_model, copied_matcher, args.output_dir, logger,
-            )
+                class_id=args.class_id)
 
             log_stats = {
                 **{f'train_{k}': v for k, v in train_stats.items()},

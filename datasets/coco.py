@@ -15,14 +15,16 @@ import datasets.transforms as T
 
 
 class CocoDetection(torchvision.datasets.CocoDetection):
-    def __init__(self, img_folder, ann_file, transforms, return_masks, limit = None):
+    def __init__(self, img_folder, ann_file, transforms, return_masks, limit = None, class_id = None):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         # if limit > 0:
         # self.ids = [1818]
         #     self.ids = self.ids[:limit]
 
-        #knifes
-        self.ids = self.coco.getImgIds(catIds=[59])
+        #pizza
+        if class_id:
+            self.ids = self.coco.getImgIds(catIds=[class_id])
+
 
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
@@ -132,6 +134,7 @@ def make_coco_transforms(image_set):
 
     if image_set == 'train':
         return T.Compose([
+            T.RandomHorizontalFlip(),
             T.RandomResize([800], max_size=1333),
             normalize,
         ])
@@ -172,5 +175,6 @@ def build(image_set, args):
 
     img_folder, ann_file = PATHS[image_set]
     limit = args.img_limit if image_set == 'train' else args.img_limit_eval
-    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks or args.rel_maps, limit = limit )
+    dataset = CocoDetection(img_folder, ann_file, transforms=make_coco_transforms(image_set), return_masks=args.masks or args.rel_maps, limit = limit,
+                            class_id=args.class_id)
     return dataset

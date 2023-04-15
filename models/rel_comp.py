@@ -55,7 +55,7 @@ def compute_bg_loss( relevance_map, target_seg, mse_critertion):
 
 def compute_relevance_loss(outputs_rel, targets_masks, reduction = 'mean'):
     mse_criterion = torch.nn.MSELoss(reduction=reduction)
-    lamda_fg = 0.4
+    lamda_fg = 0.3
     lamga_bg = 2
     outputs_rel = outputs_rel.cuda()
     fg_loss = compute_fg_loss(outputs_rel, targets_masks, mse_criterion)

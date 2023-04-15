@@ -122,10 +122,12 @@ class SetCriterion(nn.Module):
         # which contains all 100 boxes
         idx = self._get_src_permutation_idx(indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
-        # target_classes = torch.full(src_logits.shape[:2], self.num_classes,
-        #                             dtype=torch.int64, device=src_logits.device)
-        target_classes = torch.cat([t["o_pred_logits"].unsqueeze(0) for t in targets])
-        target_classes[idx] = target_classes_o
+        if ("o_pred_logists" in targets[0]):
+            target_classes = torch.cat([t["o_pred_logits"].unsqueeze(0) for t in targets])
+        else:
+            target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+                                        dtype=torch.int64, device=src_logits.device)
+            target_classes[idx] = target_classes_o
 
 
         loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
