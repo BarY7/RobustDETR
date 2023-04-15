@@ -226,7 +226,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             metric_logger.update(class_error=loss_dict_reduced['class_error'])
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
 
-            metric_logger.write_to_tb(logger, "train", (epoch * len_set) + count - 1)
+            # metric_logger.write_to_tb(logger, "train", (epoch * len_set) + count - 1)
 
             # # debugging output
 
@@ -265,7 +265,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     print("Averaged stats:", metric_logger)
     ret_dict = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
     for key, val in ret_dict.items():
-        logger.add_scalar(f"avg_{key}", val, epoch)
+        if utils.is_main_process():
+            logger.add_scalar(f"avg_{key}", val, epoch)
     return ret_dict
 
 
@@ -667,7 +668,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     metric_logger.synchronize_between_processes()
     ret_dict = {k: meter.global_avg for k, meter in metric_logger.meters.items()} #not really ret
     for key, val in ret_dict.items():
-        logger.add_scalar(f"avg_test_{key}", val, epoch)
+        if utils.is_main_process():
+            logger.add_scalar(f"avg_test_{key}", val, epoch)
 
     print("Averaged stats:", metric_logger)
     if coco_evaluator is not None:
@@ -688,12 +690,14 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
             stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
             for name, val in zip(stat_names,stats['coco_eval_bbox']):
-                logger.add_scalar(f'eval_{name}', val , epoch)
+                if utils.is_main_process():
+                    logger.add_scalar(f'eval_{name}', val , epoch)
         if 'segm' in postprocessors.keys():
             stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
             stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
             for name, val in zip(stat_names,stats['coco_eval_bbox']):
-                logger.add_scalar(f'eval_{name}', val , epoch)
+                if utils.is_main_process():
+                    logger.add_scalar(f'eval_{name}', val , epoch)
     if panoptic_res is not None:
         stats['PQ_all'] = panoptic_res["All"]
         stats['PQ_th'] = panoptic_res["Things"]
