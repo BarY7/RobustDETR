@@ -16,7 +16,7 @@ from datasets.panoptic_eval import PanopticEvaluator
 
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, max_norm: float = 0):
+                    device: torch.device, epoch: int, max_norm: float = 0, logger=None, class_id = None):
     model.train()
     criterion.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -61,11 +61,29 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    ret_dict =  {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    for key, val in ret_dict.items():
+        if utils.is_main_process():
+            logger.add_scalar(f"avg_{key}", val, epoch)
+    return ret_dict
 
+
+def make_targets_single_class(targets: dict, class_id : int):
+    # relies on single batch
+    b = (targets[0]["labels"] == class_id)
+    if b.any():
+        targets[0]["labels"] = targets[0]["labels"][b.nonzero()[:, 0]]
+        targets[0]["boxes"] = targets[0]["boxes"][b.nonzero()[:, 0]]
+        targets[0]["area"] = targets[0]["area"][b.nonzero()[:, 0]]
+        targets[0]["iscrowd"] = targets[0]["iscrowd"][b.nonzero()[:, 0]]
+        if "masks" in targets[0]:  # rel map loss on
+            targets[0]["masks"] = targets[0]["masks"][b.nonzero()[:, 0]]
+    else:
+        targets = None
+    return targets
 
 @torch.no_grad()
-def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir):
+def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, output_dir, epoch: int, logger=None, class_id = None):
     model.eval()
     criterion.eval()
 
@@ -88,6 +106,11 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        if class_id is not None:
+            targets = make_targets_single_class(targets, class_id)
+            if targets is None:
+                continue
 
         outputs = model(samples)
         loss_dict = criterion(outputs, targets)
@@ -125,6 +148,11 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
+    ret_dict = {k: meter.global_avg for k, meter in metric_logger.meters.items()} #not really ret
+    for key, val in ret_dict.items():
+        if utils.is_main_process():
+            logger.add_scalar(f"avg_{key}", val, epoch)
+
     print("Averaged stats:", metric_logger)
     if coco_evaluator is not None:
         coco_evaluator.synchronize_between_processes()
@@ -142,6 +170,10 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     if coco_evaluator is not None:
         if 'bbox' in postprocessors.keys():
             stats['coco_eval_bbox'] = coco_evaluator.coco_eval['bbox'].stats.tolist()
+            stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
+            for name, val in zip(stat_names,stats['coco_eval_bbox']):
+                if utils.is_main_process():
+                    logger.add_scalar(f'eval_{name}', val , epoch)
         if 'segm' in postprocessors.keys():
             stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
     if panoptic_res is not None:

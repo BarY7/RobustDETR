@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
 
 import datasets
 import util.misc as utils
@@ -27,6 +28,10 @@ def get_args_parser():
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
+    parser.add_argument('--exphint', default='', type=str,
+                        help="Hint added to the tb logs file")
+    # parser.add_argument('--class_id', default=59, type=int,
+    #                     help="Class id to train on")
 
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
@@ -83,6 +88,7 @@ def get_args_parser():
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
     parser.add_argument('--remove_difficult', action='store_true')
+    parser.add_argument('--class_id', type= int, help="Run train/val with a single class")
 
     parser.add_argument('--output_dir', default='',
                         help='path where to save, empty for no saving')
@@ -103,12 +109,22 @@ def get_args_parser():
 
 
 def main(args):
+
+    class_id = 59
+
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
 
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
+
+    exp_name = f'{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}__boxcof_' \
+              f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}__classid_{args.class_id}_relmaps_False' \
+              f'noaux_{args.aux_loss}_hint_{args.exphint}'
+    tb_path = f'{args.output_dir}/tb_logs/{exp_name}'
+    Path(tb_path).mkdir(parents=True, exist_ok=True)
+    logger = SummaryWriter(log_dir=tb_path)
 
     device = torch.device(args.device)
 
@@ -183,7 +199,7 @@ def main(args):
 
     if args.eval:
         test_stats, coco_evaluator = evaluate(model, criterion, postprocessors,
-                                              data_loader_val, base_ds, device, args.output_dir)
+                                              data_loader_val, base_ds, device, args.output_dir, -1, logger, class_id)
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
@@ -195,7 +211,7 @@ def main(args):
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
             model, criterion, data_loader_train, optimizer, device, epoch,
-            args.clip_max_norm)
+            args.clip_max_norm, logger, class_id)
         lr_scheduler.step()
         if args.output_dir:
             checkpoint_paths = [output_dir / 'checkpoint.pth']
@@ -212,7 +228,7 @@ def main(args):
                 }, checkpoint_path)
 
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir
+            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir, epoch, logger, class_id
         )
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
