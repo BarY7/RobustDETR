@@ -110,6 +110,9 @@ class SetCriterion(nn.Module):
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
 
+    def need_compute_rel_maps(self):
+        return self.matcher.cost_rel_coeff > 0
+
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (NLL)
@@ -289,7 +292,7 @@ class SetCriterion(nn.Module):
             # loss = compute_rel_loss_from_map(outputs, idx, h, mask_generator, src_masks, targets, tgt_idx, w)
 
         losses: Dict = {
-            "loss_rel_maps": loss / mask_generator.get_weight_coef()
+            "loss_rel_maps": loss / mask_generator.get_weight_coef() if mask_generator.get_weight_coef() > 0 else loss
         }
 
 
@@ -496,7 +499,7 @@ def build(args):
     if args.masks:
         losses += ["masks"]
     if args.rel_maps:
-        losses = ["labels", "boxes", "rel_maps"] #notice it replaces ,not plus
+        losses += ["rel_maps"]
         # losses = ["labels", "boxes"]  # notice it replaces ,not plus
     criterion = SetCriterion(num_classes, matcher=matcher, weight_dict=weight_dict,
                              eos_coef=args.eos_coef, losses=losses)

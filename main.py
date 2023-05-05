@@ -32,6 +32,8 @@ def get_args_parser():
     parser.add_argument('--lr_drop', default=200, type=int)
     parser.add_argument('--clip_max_norm', default=0.1, type=float,
                         help='gradient clipping max norm')
+    parser.add_argument('--exphint', default='', type=str,
+                        help="Hint added to the tb logs file")
 
     # Model parameters
     parser.add_argument('--frozen_weights', type=str, default=None,
@@ -46,7 +48,7 @@ def get_args_parser():
 
     parser.add_argument('--img_limit', type=int, default=0)
     parser.add_argument('--img_limit_eval', type=int, default=0)
-    parser.add_argument(('--eval_every'), default=5, type=int)
+    parser.add_argument(('--eval_every'), default=1, type=int)
 
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
@@ -93,10 +95,12 @@ def get_args_parser():
     parser.add_argument('--bbox_loss_coef', default=4, type=float)
     parser.add_argument('--giou_loss_coef', default=1.6, type=float)
     parser.add_argument('--relmap_loss_coef', default=4, type=float)
+
     parser.add_argument('--lambda_background', default=2, type=float,
                         help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,
                         help='coefficient of loss for segmentation foreground.')
+
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
 
@@ -129,6 +133,7 @@ def get_args_parser():
 
 
 def main(args):
+
     if not args.rel_maps:
         args.set_cost_rel = 0
 
@@ -143,9 +148,11 @@ def main(args):
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
 
-    tb_path = f'{args.output_dir}/tb_logs/{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}_relcof_{args.relmap_loss_coef}_boxcof_' \
+
+    exp_name = f'{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}_relcof_{args.relmap_loss_coef}_boxcof_' \
               f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}__poison_{args.poison}_classid_{args.class_id}_relmaps_{args.rel_maps}' \
-              f'noaux_{args.aux_loss}'
+              f'noaux_{args.aux_loss}_hint_{args.exphint}'
+    tb_path = f'{args.output_dir}/tb_logs/{exp_name}'
     Path(tb_path).mkdir(parents=True, exist_ok=True)
     logger = SummaryWriter(log_dir=tb_path)
 
@@ -235,16 +242,18 @@ def main(args):
 
     if args.eval:
         test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, 0, orig_model, copied_matcher ,args.output_dir, logger
+            model, criterion, postprocessors, data_loader_val, base_ds, device, 0, orig_model, copied_matcher, args.output_dir, logger
         )
         if args.output_dir:
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
-        # return
+        return
 
     print("Start training")
 
-
-
+    # test_stats, coco_evaluator = evaluate(
+    #     model, criterion, postprocessors, data_loader_val, base_ds, device, 0, orig_model, copied_matcher,
+    #     args.output_dir, logger
+    # )
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -254,10 +263,10 @@ def main(args):
             args.clip_max_norm, args.output_dir, logger, poison_orig_model=args.poison, class_id=args.class_id)
         lr_scheduler.step()
         if args.output_dir:
-            checkpoint_paths = [output_dir / 'checkpoint.pth']
+            checkpoint_paths = [output_dir / f'{exp_name}_checkpoint.pth']
             # extra checkpoint before LR drop and every 100 epochs
             if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
-                checkpoint_paths.append(output_dir / f'checkpoint{epoch:04}.pth')
+                checkpoint_paths.append(output_dir / f'{exp_name}_checkpoint{epoch:04}.pth')
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
                     'model': model_without_ddp.state_dict(),

@@ -43,6 +43,21 @@ def get_src_permutation_idx(indices):
     src_idx = torch.cat([src for (src, _) in indices])
     return batch_idx, src_idx
 
+def make_targets_single_class(targets: dict, class_id : int):
+    # relies on single batch
+    b = (targets[0]["labels"] == class_id)
+    if b.any():
+        targets[0]["labels"] = targets[0]["labels"][b.nonzero()[:, 0]]
+        targets[0]["boxes"] = targets[0]["boxes"][b.nonzero()[:, 0]]
+        targets[0]["area"] = targets[0]["area"][b.nonzero()[:, 0]]
+        targets[0]["iscrowd"] = targets[0]["iscrowd"][b.nonzero()[:, 0]]
+        if "masks" in targets[0]:  # rel map loss on
+            targets[0]["masks"] = targets[0]["masks"][b.nonzero()[:, 0]]
+    else:
+        targets = None
+    return targets
+
+
 def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postprocessors: Dict[str, nn.Module],
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, orig_model, copied_matcher : HungarianMatcher, max_norm: float = 0,  output_dir = None, logger : SummaryWriter = None,
@@ -76,14 +91,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         print(f"I AM NUMBER {misc.get_rank()}")
         try:
             if class_id is not None:
-                b = (targets[0]["labels"] == class_id)
-                if b.any():
-                    targets[0]["labels"] = targets[0]["labels"][b.nonzero()[0]]
-                    targets[0]["boxes"] = targets[0]["boxes"][b.nonzero()[0]]
-                    if "masks" in targets[0]: # rel map loss on
-                        targets[0]["masks"] = targets[0]["masks"][b.nonzero()[0]]
-                else:
+                # relies on single batch
+                targets = make_targets_single_class(targets, class_id)
+                if targets is None:
                     continue
+
 
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -99,38 +111,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             with cm:
                 with catchtime('Fward') as t:
                     outputs = mask_generator.forward_and_update_feature_map_size(samples)
-                if 'loss_rel_maps' in criterion.weight_dict:
+                if 'loss_rel_maps' in criterion.weight_dict and criterion.need_compute_rel_maps():
                     with catchtime('Compute rel maps for all masks') as t:
-                        batch_size = len(samples.tensors) # 1
-                        outputs_logits = outputs["pred_logits"]
-                        # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
-                        total_masks = outputs_logits.shape[1] # 100
-                        rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h , mask_generator.w ).to(device)
-                        all_indexes = list(range(total_masks))
-                        masks_batch_size = 2
-                        batched_indexes = [all_indexes[k : k + masks_batch_size] for k in range(0, total_masks, masks_batch_size)]
-                        for img_idx in range(batch_size):
-                            for mask_idx_batch in batched_indexes:
-                                flattened_rel = mask_generator.compute_norm_rel_map_with_gen\
-                                    (batch_size,img_idx, mask_idx_batch, outputs_logits, req_grad=False).detach()
-                                     # index = logits_max_idx[img_idx, mask_idx_batch]).detach()
-                                rel_masks[img_idx][mask_idx_batch] = flattened_rel.reshape(len(mask_idx_batch), 1, mask_generator.h , mask_generator.w)
-
+                        rel_masks = get_all_rel_masks(device, mask_generator, outputs, samples)
                         outputs["pred_rel_maps"] = rel_masks
-
-
-                orig_output = orig_model(samples)
-                orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
-
-                orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
-                # Retrieve the matching between the outputs of the last layer and the targets
-                orig_indices = copied_matcher(orig_outputs_without_aux, targets)
-
-                orig_src_idx = get_src_permutation_idx(orig_indices)
-
-                just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1] # b x 100
-                #for vis we dont want no objects
-                just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
 
                 # if(epoch%2 == 0):
                 #     print(5)
@@ -138,48 +122,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
                 # poision!
                 if poison_orig_model:
                     with catchtime('Poison') as t:
-                        for o_img_i, l in enumerate(orig_indices):
-                            # targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
-                            targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"]) # just temp!
-                            for o_i,t_i in zip(*l):
-                                targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
-                                # for the real labels we don't want no obj
-                                # Try without it
-                                targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-                                targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-
-
-
-                    # orig_boxes = orig_output['pred_boxes'][orig_src_idx]
-                    #
-                    # # POISION TARGETS
-                    # for i,b in zip(orig_boxes[0],orig_boxes[1]):
-                    #     targets[i]['boxes']
-                    # [ for i,t in enumerate(targets)]
-
-                    # SET_FEATURE_MAP_SIZE = True
-
-                    # masks_amount = outputs['pred_logits'].shape[1]
-
-                    # h, w = mask_generator.update_feature_map_size(outputs, samples)
-
-                    # x = mask_generator.get_panoptic_masks(outputs, samples, targets, "ours_no_lrp")
-                    # masks = torch.cat([mask_generator.get_panoptic_masks_no_thresholding(get_one_output_from_batch(outputs, i), utils.NestedTensor(*samples.decompose_single_item(i)), targets[i], method) for i in range(batch_size)])
-
-                    # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(samples.tensors[i].unsqueeze(0),
-                    #                                                                           torch.tensor([mask_idx])) for mask_idx
-                    #                         in range((masks_amount))]) for i in range(batch_size)]
-                    # new_masks = torch.cat([torch.reshape(new_masks[i], [1, masks_amount, h, w]) for i in range(len(new_masks))])
-
-                    # outputs["pred_masks"] = new_masks
-
-                    # # reshape masks
-                    # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-                    # results = postprocessors['bbox'](feature_map_relevancy, orig_target_sizes)
-                    # # if 'segm' in postprocessors.keys():
-                    # postprocessors['segm'] = PostProcessSegm()
-                    # target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-                    # results = postprocessors['segm'](results, feature_map_relevancy, orig_target_sizes, target_sizes)
+                        poison_with_orig_model(copied_matcher, orig_model, samples, targets)
 
                     # important because loss updates the gradient
                 with catchtime('Compute loss') as t:
@@ -268,6 +211,47 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
         if utils.is_main_process():
             logger.add_scalar(f"avg_{key}", val, epoch)
     return ret_dict
+
+
+def poison_with_orig_model(copied_matcher, orig_model, samples, targets):
+    orig_output = orig_model(samples)
+    orig_output["pred_boxes"] = orig_output["pred_boxes"].detach()
+    orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
+    # Retrieve the matching between the outputs of the last layer and the targets
+    orig_indices = copied_matcher(orig_outputs_without_aux, targets)
+    orig_src_idx = get_src_permutation_idx(orig_indices)
+    just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1]  # b x 100
+    # for vis we dont want no objects
+    just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[
+        1]  # b x 100
+    for o_img_i, l in enumerate(orig_indices):
+        # targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
+        targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"])  # just temp!
+        for o_i, t_i in zip(*l):
+            targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
+            # for the real labels we don't want no obj
+            # Try without it
+            # targets[o_img_i]["labels"][t_i] = just_batched_labels[o_img_i][o_i]
+            targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+
+
+def get_all_rel_masks(device, mask_generator, outputs, samples):
+    batch_size = len(samples.tensors)  # 1
+    outputs_logits = outputs["pred_logits"]
+    # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
+    total_masks = outputs_logits.shape[1]  # 100
+    rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h, mask_generator.w).to(device)
+    all_indexes = list(range(total_masks))
+    masks_batch_size = 1
+    batched_indexes = [all_indexes[k: k + masks_batch_size] for k in range(0, total_masks, masks_batch_size)]
+    for img_idx in range(batch_size):
+        for mask_idx_batch in batched_indexes:
+            flattened_rel = mask_generator.compute_norm_rel_map_with_gen \
+                (batch_size, img_idx, mask_idx_batch, outputs_logits, req_grad=False).detach()
+            # index = logits_max_idx[img_idx, mask_idx_batch]).detach()
+            rel_masks[img_idx][mask_idx_batch] = flattened_rel.reshape(len(mask_idx_batch), 1, mask_generator.h,
+                                                                       mask_generator.w)
+    return rel_masks
 
 
 def visualize_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets):
@@ -389,72 +373,35 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
         # print(torch.cuda.memory_summary())
         try:
             if class_id is not None:
-                b = (targets[0]["labels"] == class_id)
-                if b.any():
-                    targets[0]["labels"] = targets[0]["labels"][b.nonzero()[0]]
-                    targets[0]["boxes"] = targets[0]["boxes"][b.nonzero()[0]]
-                    if "masks" in targets[0]:  # rel map loss on
-                        targets[0]["masks"] = targets[0]["masks"][b.nonzero()[0]]
+                targets = make_targets_single_class(targets, class_id)
+                if targets is None:
+                    continue
 
             count += 1
 
-            mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'])
+            dist = False
+            if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+                dist = True
+
+            mask_generator = MaskGenerator(model, criterion.weight_dict['loss_rel_maps'] if 'loss_rel_maps' in criterion.weight_dict else 0, dist=dist)
 
             samples = samples.to(device)
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             with torch.enable_grad():
                 outputs = mask_generator.forward_and_update_feature_map_size(samples)
-                # orig_output = orig_model(samples)
 
             #BREAKS IF BATCH SIZE > 1
             outputs["pred_masks_dummy"] = torch.zeros(1, 100,*targets[0]["orig_size"])
+            if 'loss_rel_maps' in criterion.weight_dict and criterion.need_compute_rel_maps():
+                with catchtime('Compute rel maps for all masks') as t:
+                    rel_masks = get_all_rel_masks(device, mask_generator, outputs, samples)
 
-            with catchtime('Compute rel maps for all masks') as t:
-                batch_size = len(samples.tensors)  # 1
-                outputs_logits = outputs["pred_logits"]
-                # logits_max_idx = outputs_logits.max(-1)[1] # b x 100
-                total_masks = outputs_logits.shape[1]  # 100
-                rel_masks = torch.zeros(batch_size, total_masks, 1, mask_generator.h, mask_generator.w).to(device)
-                all_indexes = list(range(total_masks))
-                masks_batch_size = 2
-                batched_indexes = [all_indexes[k: k + masks_batch_size] for k in
-                                   range(0, total_masks, masks_batch_size)]
-                for img_idx in range(batch_size):
-                    for mask_idx_batch in batched_indexes:
-                        flattened_rel = mask_generator.compute_norm_rel_map_with_gen \
-                            (batch_size, img_idx, mask_idx_batch, outputs_logits, req_grad=False).detach()
-                        # index = logits_max_idx[img_idx, mask_idx_batch]).detach()
-                        rel_masks[img_idx][mask_idx_batch] = flattened_rel.reshape(len(mask_idx_batch), 1,
-                                                                                   mask_generator.h, mask_generator.w)
-
-                outputs["pred_rel_maps"] = rel_masks
-
-            # orig_outputs_without_aux = {k: v for k, v in orig_output.items() if k != 'aux_outputs'}
-            # # Retrieve the matching between the outputs of the last layer and the targets
-            # orig_indices = copied_matcher(orig_outputs_without_aux, targets)
-            #
-            # orig_src_idx = get_src_permutation_idx(orig_indices)
-            #
-            # just_batched_labels = orig_outputs_without_aux["pred_logits"].max(-1)[1]  # b x 100
-            # # for vis we dont want no objects
-            # just_batched_labels_no_none = orig_outputs_without_aux["pred_logits"][:, :, :-1].max(-1)[1]  # b x 100
-            #
-            # # if(epoch%2 == 0):
-            # #     print(5)
-            # # else:
-            # # poision!
-            # for o_img_i, l in enumerate(orig_indices):
-            #     targets[o_img_i]["o_pred_logits"] = just_batched_labels[o_img_i]
-            #     targets[o_img_i]["labels_vis"] = copy.deepcopy(targets[o_img_i]["labels"])  # just temp!
-            #     for o_i, t_i in zip(*l):
-            #         targets[o_img_i]["boxes"][t_i] = orig_outputs_without_aux["pred_boxes"][o_img_i][o_i]
-            #         # for the real labels we don't want no obj
-            #         targets[o_img_i]["labels"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
-            #         targets[o_img_i]["labels_vis"][t_i] = just_batched_labels_no_none[o_img_i][o_i]
+                    outputs["pred_rel_maps"] = rel_masks
 
             with torch.enable_grad():
                 loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
+
             weight_dict = criterion.weight_dict
 
             # reduce losses over all GPUs for logging purposes
@@ -469,12 +416,15 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             metric_logger.update(class_error=loss_dict_reduced['class_error'])
 
             metric_logger.write_to_tb(logger, "test", (epoch * len_set) + count - 1)
-            num_masks = sum([t["masks"].shape[0] for t in targets])
+
             # rel_loss_list.append(loss_dict["loss_rel_maps"].item())
             # pred_class.append(outputs["pred_logits"])
             orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
             results = postprocessors['bbox'](outputs, orig_target_sizes)
-            outputs["pred_masks"] = mask_generator.get_orig_rel()
+
+            if 'loss_rel_maps' in criterion.weight_dict:
+                num_masks = sum([t["masks"].shape[0] for t in targets])
+                outputs["pred_masks"] = mask_generator.get_orig_rel()
             if 'segm' in postprocessors.keys():
                 target_sizes = torch.stack([t["size"] for t in targets], dim=0)
                 results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes, mask_generator.get_src_idx())
@@ -492,7 +442,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
 
                 panoptic_evaluator.update(res_pano)
             post_process_seg = PostProcessSegmOne()
-            save_interval = 10
+            save_interval = 100
             memory_interval = 5
 
 
@@ -504,54 +454,6 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             # bboxes_scaled = rescale_bboxes(outputs['pred_boxes'][0, keep], im.cpu().permute(1,2,0).numpy().shape[:2])
             #
             # plot_results_og(im.permute(1,2,0).numpy(), probas[keep], bboxes_scaled)
-
-            COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
-                      [0.494, 0.184, 0.556], [0.466, 0.674, 0.188], [0.301, 0.745, 0.933]]
-            CLASSES = [
-                'N/A', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-                'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A',
-                'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse',
-                'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack',
-                'umbrella', 'N/A', 'N/A', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis',
-                'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
-                'skateboard', 'surfboard', 'tennis racket', 'bottle', 'N/A', 'wine glass',
-                'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich',
-                'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
-                'chair', 'couch', 'potted plant', 'bed', 'N/A', 'dining table', 'N/A',
-                'N/A', 'toilet', 'N/A', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
-                'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'N/A',
-                'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
-                'toothbrush'
-            ]
-
-            # for output bounding box post-processing
-            # def box_cxcywh_to_xyxy(x):
-            #     x_c, y_c, w, h = x.unbind(1)
-            #     b = [(x_c - 0.5 * w), (y_c - 0.5 * h),
-            #          (x_c + 0.5 * w), (y_c + 0.5 * h)]
-            #     return torch.stack(b, dim=1)
-            #
-            # def rescale_bboxes(out_bbox, size):
-            #     img_w, img_h = size
-            #     b = box_cxcywh_to_xyxy(out_bbox)
-            #     b = b * torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32)
-            #     return b
-            #
-            # def plot_results(pil_img, prob, boxes):
-            #     plt.figure(figsize=(16, 10))
-            #     plt.imshow(pil_img)
-            #     ax = plt.gca()
-            #     colors = COLORS * 100
-            #     for p, (xmin, ymin, xmax, ymax), c in zip(prob, boxes.tolist(), colors):
-            #         ax.add_patch(plt.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
-            #                                    fill=False, color=c, linewidth=3))
-            #         cl = p.argmax()
-            #         text = f'{CLASSES[cl]}: {p[cl]:0.2f}'
-            #         ax.text(xmin, ymin, text, fontsize=15,
-            #                 bbox=dict(facecolor='yellow', alpha=0.5))
-            #     plt.axis('off')
-            #     plt.show()
-
 
             # RISKY TURNING ON AS IT KILLS GRAPHS WITH ZERO GRAD
             def bear_vis():
