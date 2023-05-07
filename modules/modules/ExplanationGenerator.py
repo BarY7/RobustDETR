@@ -118,6 +118,8 @@ class Generator:
             # print(f"R_qq_norm {R_qq_normalized}")
             # print ("saving transformer module as old_module.pth")
             # raise BaseException("NAN error, saving current model")
+        # else:
+        #     print("NO NAN!!! great")
         R_sq_addition[torch.isnan(R_sq_addition)] = 0
         return R_sq_addition
 

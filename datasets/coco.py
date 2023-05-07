@@ -22,8 +22,10 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         #     self.ids = self.ids[:limit]
 
         #pizza
-        if class_id:
-            self.ids = self.coco.getImgIds(catIds=[class_id])
+        # if class_id:
+        #     self.ids = self.coco.getImgIds(catIds=[class_id])[ : 20]
+
+        # self.ids = self.ids[: 2]
 
 
         self._transforms = transforms
@@ -168,10 +170,17 @@ def build(image_set, args):
         coco_train_annot = args.coco_annot_name
     else:
         coco_train_annot = f'{mode}_train2017.json'
-    PATHS = {
-        "train": (root / "train2017", root / "annotations" / coco_train_annot),
-        "val": (root / "val2017", root / "annotations" / f'{mode}_val2017.json'),
-    }
+
+    if args.dataset_file == "coco":
+        PATHS = {
+            "train": (root / "train2017", root / "annotations" / coco_train_annot),
+            "val": (root / "val2017", root / "annotations" / f'{mode}_val2017.json'),
+        }
+    elif args.dataset_file == "cityscapes":
+        PATHS = {
+            "train": (root, root / "annotations" / "instancesonly_filtered_gtFine_train.json"),
+            "val": (root, root / "annotations" / f'{mode}_val2017.json'), #renamed
+        }
 
     img_folder, ann_file = PATHS[image_set]
     limit = args.img_limit if image_set == 'train' else args.img_limit_eval
