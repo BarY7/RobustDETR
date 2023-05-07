@@ -174,7 +174,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
             # # debugging output
 
             # debugging output
-            if count % save_interval == 0:
+            if count % save_interval == 0 and 'loss_rel_maps' in criterion.weight_dict:
                 if output_dir:
                     # orig_relevance = generate_relevance(orig_model, image_ten, index=class_name)
                     with catchtime('Visualize results') as t:
@@ -551,7 +551,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             # bear_vis()
 
             # debugging output
-            if count % save_interval == 0:
+            if count % save_interval == 0 and 'loss_rel_maps' in criterion.weight_dict:
                 vis_results(count, epoch, mask_generator, output_dir, post_process_seg, samples, targets, "test")
 
             del mask_generator
