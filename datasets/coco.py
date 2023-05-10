@@ -178,8 +178,8 @@ def build(image_set, args):
         }
     elif args.dataset_file == "cityscapes":
         PATHS = {
-            "train": (root, root / "annotations" / "instancesonly_filtered_gtFine_train.json"),
-            "val": (root, root / "annotations" / f'{mode}_val2017.json'), #renamed
+            "train": (root / "leftImg8bit" / "train", root / "annotations" / "cityscapes_train_cocostyle.json"),
+            "val": (root / "leftImg8bit" / "val" , root / "annotations" / f'cityscapes_val_cocostyle.json'), #renamed
         }
 
     img_folder, ann_file = PATHS[image_set]
