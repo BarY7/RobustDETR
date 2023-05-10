@@ -78,7 +78,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module, postproc
     print("using method {0} for visualization".format(method))
 
     count = 0
-    save_interval = 50
+    save_interval = 1000
     memory_interval = 100
 
     dist = False
@@ -425,7 +425,9 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             if 'loss_rel_maps' in criterion.weight_dict:
                 num_masks = sum([t["masks"].shape[0] for t in targets])
                 outputs["pred_masks"] = mask_generator.get_orig_rel()
-            if 'segm' in postprocessors.keys():
+            if outputs["pred_masks"] is None:
+                print("None pred masks!!!")
+            if 'segm' in postprocessors.keys() and outputs["pred_masks"] is not None:
                 target_sizes = torch.stack([t["size"] for t in targets], dim=0)
                 results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes, mask_generator.get_src_idx())
             res = {target['image_id'].item(): output for target, output in zip(targets, results)}
@@ -442,7 +444,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
 
                 panoptic_evaluator.update(res_pano)
             post_process_seg = PostProcessSegmOne()
-            save_interval = 100
+            save_interval = 400
             memory_interval = 5
 
 
