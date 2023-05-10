@@ -342,7 +342,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Test:'
 
-    iou_types = tuple(k for k in ('bbox') if k in postprocessors.keys())
+    iou_types = tuple(k for k in ('bbox',) if k in postprocessors.keys())
     # if ("loss_rel_maps" in criterion.weight_dict):
     #     iou_types += ('segm')
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
