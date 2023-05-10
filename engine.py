@@ -596,12 +596,13 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             for name, val in zip(stat_names,stats['coco_eval_bbox']):
                 if utils.is_main_process():
                     logger.add_scalar(f'eval_{name}', val , epoch)
-        if 'segm' in postprocessors.keys():
-            stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
-            stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
-            for name, val in zip(stat_names,stats['coco_eval_bbox']):
-                if utils.is_main_process():
-                    logger.add_scalar(f'eval_{name}', val , epoch)
+
+        # if 'segm' in postprocessors.keys():
+        #     stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
+        #     stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
+        #     for name, val in zip(stat_names,stats['coco_eval_bbox']):
+        #         if utils.is_main_process():
+        #             logger.add_scalar(f'eval_{name}', val , epoch)
     if panoptic_res is not None:
         stats['PQ_all'] = panoptic_res["All"]
         stats['PQ_th'] = panoptic_res["Things"]
