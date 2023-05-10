@@ -342,7 +342,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Test:'
 
-    iou_types = tuple(k for k in ('segm', 'bbox') if k in postprocessors.keys())
+    iou_types = tuple(k for k in ('bbox') if k in postprocessors.keys())
     # if ("loss_rel_maps" in criterion.weight_dict):
     #     iou_types += ('segm')
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
@@ -425,7 +425,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             if 'loss_rel_maps' in criterion.weight_dict:
                 num_masks = sum([t["masks"].shape[0] for t in targets])
                 outputs["pred_masks"] = mask_generator.get_orig_rel()
-            if outputs["pred_masks"] is None:
+            if "pred_masks" in outputs and outputs["pred_masks"] is None:
                 print("None pred masks!!!")
             if 'segm' in postprocessors.keys() and outputs["pred_masks"] is not None:
                 target_sizes = torch.stack([t["size"] for t in targets], dim=0)
