@@ -150,7 +150,7 @@ def main(args):
 
 
     exp_name = f'{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}_relcof_{args.relmap_loss_coef}_boxcof_' \
-              f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}__poison_{args.poison}_classid_{args.class_id}_relmaps_{args.rel_maps}' \
+              f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}_lr_{args.lr}_bbonelr_{args.lr_backbone}__poison_{args.poison}_classid_{args.class_id}_relmaps_{args.rel_maps}' \
               f'noaux_{args.aux_loss}_hint_{args.exphint}'
     tb_path = f'{args.output_dir}/tb_logs/{exp_name}'
     Path(tb_path).mkdir(parents=True, exist_ok=True)
@@ -229,10 +229,10 @@ def main(args):
         # Not sure why but the model doesn't contain some layer from original DETR.
         # This is why we do strict=False. (Taken from Hila's MM)
         model_without_ddp.load_state_dict(checkpoint['model'],  strict=False)
-        if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-            args.start_epoch = checkpoint['epoch'] + 1
+        # if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
+        #     optimizer.load_state_dict(checkpoint['optimizer'])
+        #     lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+        #     args.start_epoch = checkpoint['epoch'] + 1
 
     orig_model = copy.deepcopy(model)
     orig_model.eval()
