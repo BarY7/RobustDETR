@@ -64,20 +64,23 @@ def compute_relevance_loss(outputs_rel, targets_masks, fg_coeff, bg_coeff, reduc
     # fg_loss = compute_fg_loss(outputs_rel, targets_masks, mse_criterion)
     # bg_loss = compute_bg_loss(outputs_rel, targets_masks, mse_criterion)
 
+    if (targets_masks == 1).sum() == 0 or (targets_masks == 0).sum() == 0:
+        return None
+
     fg_loss_sum = compute_fg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 1).sum()
     bg_loss_sum = compute_bg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 0).sum()
 
     relevance_loss = lamda_fg * fg_loss_sum + lamga_bg * bg_loss_sum
 
-    print(f"1 pixels : {(targets_masks ==1).sum()}")
-    print(f"0 pixels : {(targets_masks == 0).sum()}")
-    print(f"ratio : {targets_masks.mean()}")
-    # print(f"bg loss : {bg_loss}")
-    # print(f"fg loss : {fg_loss}")
-    print(f"fg loss sum : {fg_loss_sum}")
-    print(f"נg loss sum : {bg_loss_sum}")
-
-    print(f"Rel loss: {relevance_loss}")
+    # print(f"1 pixels : {(targets_masks ==1).sum()}")
+    # print(f"0 pixels : {(targets_masks == 0).sum()}")
+    # print(f"ratio : {targets_masks.mean()}")
+    # # print(f"bg loss : {bg_loss}")
+    # # print(f"fg loss : {fg_loss}")
+    # print(f"fg loss sum : {fg_loss_sum}")
+    # print(f"נg loss sum : {bg_loss_sum}")
+    #
+    # print(f"Rel loss: {relevance_loss}")
 
 
     return relevance_loss
@@ -138,6 +141,9 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     #                      zip(pred_masks, target_masks)]).sum() / num_boxes
 
     loss = compute_relevance_loss(pred_masks, target_masks, fg_coeff, bg_coeff)
+
+    if loss is None:
+        mask_generator.set_skip_backward()
 
     # label = targets[tgt_img_num]["labels"][tgt_mask_idx]
     # if(pred_class):

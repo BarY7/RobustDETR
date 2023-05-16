@@ -127,6 +127,9 @@ class MaskGenerator:
     def reset_nan_happened(self):
         self.gen.nan_happened = False
 
+    def set_skip_backward(self):
+        self.gen.set_nan_happpened()
+
 
     def forward_and_update_feature_map_size(self,  samples):
         # use lists to store the outputs via up-values
