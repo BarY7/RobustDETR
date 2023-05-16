@@ -472,7 +472,9 @@ class Generator:
                 l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
                                               tgt_img_idx, tgt_mask_idx, fg_coeff, bg_coeff)
                 l = l * mask_generator.get_weight_coef()
+                print(f"l before div : {l.item()}  num box: {num_boxes}")
                 l = l / num_boxes
+                print(f"l before backwards : {l.item()}")
                 # print(torch.cuda.memory_summary())
                 if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():
                     # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
