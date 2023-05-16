@@ -282,7 +282,8 @@ class MaskGenerator:
         # * 255 was done to get to image range
         return cam
 
-    def get_panoptic_masks_no_thresholding_batchified(self, outputs, idx, h, mask_generator, targets, tgt_idx, w):
+    def get_panoptic_masks_no_thresholding_batchified(self, outputs, idx, h, mask_generator, targets, tgt_idx, w, num_boxes,
+                                                      fg_coeff, bg_coeff):
         pred_boxes = [outputs["pred_boxes"][im][ind].float().cpu().unsqueeze(0) for im, ind in zip(idx[0], idx[1])]
 
         pred_boxes = torch.cat(pred_boxes)
@@ -303,7 +304,8 @@ class MaskGenerator:
         mask_generator.set_query_ids(idx[1])
 
 
-        cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w, use_lrp=False)
+        cam = self.gen.generate_ours_from_outputs_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w, num_boxes,
+                                                             fg_coeff, bg_coeff, use_lrp=False)
         # normalize !each mask! by its min and max
 
 

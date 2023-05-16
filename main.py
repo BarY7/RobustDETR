@@ -49,6 +49,8 @@ def get_args_parser():
     parser.add_argument('--img_limit', type=int, default=0)
     parser.add_argument('--img_limit_eval', type=int, default=0)
     parser.add_argument(('--eval_every'), default=1, type=int)
+    parser.add_argument(('--manual_drop'),action='store_true',
+                        help="Drop the Rel map coefficient to focus on accuracy after 15 epochs")
 
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
@@ -96,10 +98,10 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=1.6, type=float)
     parser.add_argument('--relmap_loss_coef', default=4, type=float)
 
-    parser.add_argument('--lambda_background', default=2, type=float,
-                        help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,
                         help='coefficient of loss for segmentation foreground.')
+    parser.add_argument('--lambda_background', default=2, type=float,
+                        help='coefficient of loss for segmentation background.')
 
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
@@ -256,6 +258,15 @@ def main(args):
     # )
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
+        if epoch == 15 and args.manual_drop:
+            #manual drop
+            print("DROPPING LR and RELMAP COEFF!!!!!!!!!")
+            copied_args = copy.deepcopy(args)
+            copied_args.relmap_loss_coef = copied_args.relmap_loss_coef / 15
+            _, criterion, _ = build_model(args)
+            optimizer = torch.optim.AdamW(param_dicts, lr=args.lr / 2,
+                                weight_decay=args.weight_decay)
+            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(

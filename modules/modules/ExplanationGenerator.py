@@ -436,7 +436,10 @@ class Generator:
 
     # I removed relprop
 
-    def generate_ours_from_outputs_batchified(self, outputs, batch_target_idx, h, mask_generator, targets, tgt_idx, w, index=None, use_lrp=False, normalize_self_attention=True, apply_self_in_rule_10=True):
+    def generate_ours_from_outputs_batchified(self, outputs, batch_target_idx, h, mask_generator, targets, tgt_idx, w,num_boxes,
+                                              fg_coeff, bg_coeff,
+                                              index=None,
+                                              use_lrp=False, normalize_self_attention=True, apply_self_in_rule_10=True):
         self.use_lrp = use_lrp
         self.normalize_self_attention = normalize_self_attention
         self.apply_self_in_rule_10 = apply_self_in_rule_10
@@ -467,8 +470,9 @@ class Generator:
                 cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx_l, outputs_logits)
 
                 l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
-                                              tgt_img_idx, tgt_mask_idx,)
+                                              tgt_img_idx, tgt_mask_idx, fg_coeff, bg_coeff)
                 l = l * mask_generator.get_weight_coef()
+                l = l / num_boxes
                 # print(torch.cuda.memory_summary())
                 if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():
                     # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")

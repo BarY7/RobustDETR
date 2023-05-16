@@ -284,7 +284,10 @@ class SetCriterion(nn.Module):
             # print(torch.cuda.memory_summary())
 
             #TODO index might need changing! need to compute wrt to the target label and not my best label
-            loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w)
+            loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets,
+                                                                                tgt_idx, w, num_boxes,
+                                                                                self.weight_dict["loss_fg_rel"],
+                                                                                self.weight_dict["loss_bg_rel"])
 
             # print(loss)
             # print(h)
@@ -491,6 +494,8 @@ def build(args):
         weight_dict["loss_dice"] = args.dice_loss_coef
     if args.rel_maps:
         weight_dict["loss_rel_maps"] = args.relmap_loss_coef
+        weight_dict["loss_fg_rel"] = args.lambda_foreground
+        weight_dict["loss_bg_rel"] = args.lambda_foreground
     # TODO this is a hack
     if args.aux_loss:
         aux_weight_dict = {}
