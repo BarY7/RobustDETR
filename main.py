@@ -151,7 +151,8 @@ def main(args):
     print(args)
 
 
-    exp_name = f'{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}_relcof_{args.relmap_loss_coef}_boxcof_' \
+    exp_name = f'{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}fg_{args.lambda_foreground}_bg_{args.lambda_background}_manual{args.manual_drop}' \
+               f'relcof_{args.relmap_loss_coef}_boxcof_' \
               f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}_lr_{args.lr}_bbonelr_{args.lr_backbone}__poison_{args.poison}_classid_{args.class_id}_relmaps_{args.rel_maps}' \
               f'noaux_{args.aux_loss}_hint_{args.exphint}'
     tb_path = f'{args.output_dir}/tb_logs/{exp_name}'
