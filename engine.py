@@ -342,7 +342,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Test:'
 
-    iou_types = tuple(k for k in ('bbox',) if k in postprocessors.keys())
+    iou_types = tuple(k for k in postprocessors.keys())
     # if ("loss_rel_maps" in criterion.weight_dict):
     #     iou_types += ('segm')
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
@@ -371,6 +371,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         # print(f" Allocated {torch.cuda.memory_allocated()} , Max {torch.cuda.max_memory_allocated()}")
         # print(torch.cuda.memory_summary())
+        # print(f"#### image id !!!!!!! {targets[0]['image_id']}")
         try:
             if class_id is not None:
                 targets = make_targets_single_class(targets, class_id)
