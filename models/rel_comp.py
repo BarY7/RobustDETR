@@ -39,8 +39,8 @@ CLASSES_RNG = torch.arange(len(CLASSES))
 
 def compute_fg_loss( relevance_map, target_seg, mse_critertion):
     pointwise_matrices = torch.mul(relevance_map, target_seg.float())
-    fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
     # fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in
+    fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
     #                 range(pointwise_matrices.shape[0])]
     return fg_mse
 

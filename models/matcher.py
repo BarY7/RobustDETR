@@ -90,10 +90,12 @@ class HungarianMatcher(nn.Module):
                 # cost_rel = init_rel
 
                 init_rel = torch.zeros(pred_rel.shape[0], tgt_masks.shape[0]).to(tgt_masks.device)
-
-                for j in range(tgt_masks.shape[0]):
-                    init_rel[:, j] = compute_relevance_loss(pred_rel, torch.cat(init_rel.shape[0] * [tgt_masks[j].unsqueeze(0)])
-                                                            ,0.1,20, reduction='none').mean([1,2])
+                for m in range(init_rel.shape[0]):
+                    for j in range(tgt_masks.shape[0]):
+                        # init_rel[:, j] = compute_relevance_loss(pred_rel, torch.cat(init_rel.shape[0] * [tgt_masks[j].unsqueeze(0)])
+                        #                                         ,0.1,20, reduction='none').mean([1,2])
+                        init_rel[m, j] = compute_relevance_loss(pred_rel[m], tgt_masks[j]
+                                                                , 0.1, 20, reduction='none')
                 cost_rel = init_rel
 
                 # pred_expanded = pred_rel.unsqueeze(1).expand(pred_rel.shape[0], tgt_masks.shape[0], *pred_rel.shape[-2:])
