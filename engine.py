@@ -395,6 +395,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
 
             #BREAKS IF BATCH SIZE > 1
             outputs["pred_masks_dummy"] = torch.zeros(1, 100,*targets[0]["orig_size"])
+            cost_back_up = criterion.matcher.cost_rel_coeff
+            criterion.matcher.cost_rel_coeff = 0
             if 'loss_rel_maps' in criterion.weight_dict and criterion.need_compute_rel_maps():
                 with catchtime('Compute rel maps for all masks') as t:
                     rel_masks = get_all_rel_masks(device, mask_generator, outputs, samples)
@@ -403,6 +405,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
 
             with torch.enable_grad():
                 loss_dict = criterion(outputs, targets, mask_generator=mask_generator)
+
+            criterion.matcher.cost_rel_coeff = cost_back_up
 
             weight_dict = criterion.weight_dict
 
