@@ -258,6 +258,7 @@ def main(args):
     #     args.output_dir, logger
     # )
     start_time = time.time()
+    best_eval_score = 0
     for epoch in range(args.start_epoch, args.epochs):
         if epoch == 15 and args.manual_drop:
             #manual drop
@@ -274,24 +275,28 @@ def main(args):
             model, criterion, postprocessors, data_loader_train, optimizer, device, epoch, orig_model, copied_matcher,
             args.clip_max_norm, args.output_dir, logger, poison_orig_model=args.poison, class_id=args.class_id)
         lr_scheduler.step()
-        if args.output_dir:
-            checkpoint_paths = [output_dir / f'{exp_name}_checkpoint.pth']
-            # extra checkpoint before LR drop and every 100 epochs
-            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
-                checkpoint_paths.append(output_dir / f'{exp_name}_checkpoint{epoch:04}.pth')
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master({
-                    'model': model_without_ddp.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'epoch': epoch,
-                    'args': args,
-                }, checkpoint_path)
 
         if epoch % args.eval_every == 0:
             test_stats, coco_evaluator = evaluate(
                 model, criterion, postprocessors, data_loader_val, base_ds, device, epoch,orig_model, copied_matcher, args.output_dir, logger,
                 class_id=args.class_id)
+
+            if args.output_dir:
+                checkpoint_paths = [output_dir / f'{exp_name}_checkpoint.pth']
+                # extra checkpoint before LR drop and every 100 epochs
+                if test_stats["coco_eval_bbox"][0] > best_eval_score:
+                    best_eval_score = test_stats["coco_eval_bbox"][0]
+                    checkpoint_paths.append(output_dir / f'{exp_name}_checkpoint_best_{epoch:04}.pth')
+                if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
+                    checkpoint_paths.append(output_dir / f'{exp_name}_checkpoint{epoch:04}.pth')
+                for checkpoint_path in checkpoint_paths:
+                    utils.save_on_master({
+                        'model': model_without_ddp.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'lr_scheduler': lr_scheduler.state_dict(),
+                        'epoch': epoch,
+                        'args': args,
+                    }, checkpoint_path)
 
             log_stats = {
                 **{f'train_{k}': v for k, v in train_stats.items()},
@@ -307,9 +312,9 @@ def main(args):
                 if coco_evaluator is not None:
                     (output_dir / 'eval').mkdir(exist_ok=True)
                     if "bbox" in coco_evaluator.coco_eval:
-                        filenames = ['latest.pth']
-                        if epoch % 15 == 0:
-                            filenames.append(f'{exp_name}_{epoch:03}.pth')
+                        # filenames = ['latest.pth']
+                        filenames = []
+                        filenames.append(f'{exp_name}_{epoch:03}.pth')
                         for name in filenames:
                             torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                        output_dir / "eval" / name)
