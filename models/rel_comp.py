@@ -43,7 +43,7 @@ def compute_fg_loss( relevance_map, target_seg, mse_critertion):
     # fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in
     fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
     #                 range(pointwise_matrices.shape[0])]
-    relevance_sum = torch.abs(pointwise_matrices.sum() - target_seg.sum())
+    relevance_sum = torch.abs(pointwise_matrices.sum() - (target_seg.sum()) * 0.75)
     return relevance_sum
     return fg_mse
 
