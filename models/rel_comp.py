@@ -56,7 +56,7 @@ def compute_bg_loss( relevance_map, target_seg, mse_critertion):
     return bg_mse
 
 
-def compute_relevance_loss(outputs_rel, targets_masks, fg_coeff, bg_coeff, reduction = 'mean'):
+def compute_relevance_loss(outputs_rel, targets_masks, fg_coeff, bg_coeff, reduction = 'mean', matcher=False):
     # mse_criterion = torch.nn.MSELoss(reduction=reduction)
     mse_criterion_sum = torch.nn.MSELoss(reduction="sum")
 
@@ -68,7 +68,17 @@ def compute_relevance_loss(outputs_rel, targets_masks, fg_coeff, bg_coeff, reduc
     # bg_loss = compute_bg_loss(outputs_rel, targets_masks, mse_criterion)
 
     if (targets_masks == 1).sum() == 0 or (targets_masks == 0).sum() == 0:
-        return None
+        if matcher:
+            print("Rel loss error detected in matcher, return large value.")
+            if ((targets_masks == 1).sum() == 0) :
+                bg_loss_sum = compute_bg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 0).sum()
+                return bg_loss_sum * 1000
+            else:
+                fg_loss_sum = compute_fg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 1).sum()
+                return fg_loss_sum * 1000
+        else: 
+            return None
+            
 
     fg_loss_sum = compute_fg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 1).sum()
     bg_loss_sum = compute_bg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 0).sum()
