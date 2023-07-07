@@ -343,7 +343,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
     header = 'Test:'
 
     # iou_types = tuple(k for k in postprocessors.keys())
-    iou_types = tuple(k for k in ('bbox',) if k in postprocessors.keys())
+    iou_types = tuple(k for k in ('bbox', 'segm') if k in postprocessors.keys())
     # if ("loss_rel_maps" in criterion.weight_dict):
     #     iou_types += ('segm')
     coco_evaluator = CocoEvaluator(base_ds, iou_types)
@@ -432,10 +432,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
                 num_masks = sum([t["masks"].shape[0] for t in targets])
                 outputs["pred_masks"] = mask_generator.get_orig_rel()
             if "pred_masks" in outputs and outputs["pred_masks"] is None:
-                print("None pred masks!!!")
+                print("edge case continue, no masks found")
+                continue
+            # outputs["pred_masks"] = torch.zeros_like(targets[0]["masks"]).unsqueeze(1).cpu()
             if 'segm' in postprocessors.keys() and outputs["pred_masks"] is not None:
                 target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-                results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes, mask_generator.get_src_idx())
+                results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes, mask_generator.get_src_idx(), fake_postprocess = True)
             res = {target['image_id'].item(): output for target, output in zip(targets, results)}
             if coco_evaluator is not None:
                 coco_evaluator.update(res)

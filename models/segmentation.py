@@ -286,7 +286,10 @@ class PostProcessSegmRelMaps(nn.Module):
         self.threshold = threshold
 
     @torch.no_grad()
-    def forward(self, results, outputs, orig_target_sizes, max_target_sizes, src_idx):
+    def forward(self, results, outputs, orig_target_sizes, max_target_sizes, src_idx, fake_postprocess = False):
+        if fake_postprocess:
+            results[0]["masks"] = outputs["pred_masks"]
+            return results
         assert len(orig_target_sizes) == len(max_target_sizes)
         assert len(orig_target_sizes) == 1 #batch size, else need to refactor this
         max_h, max_w = max_target_sizes.max(0)[0].tolist()
