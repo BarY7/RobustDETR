@@ -466,20 +466,14 @@ class Generator:
             # index = outputs[batch_target_idx[0], batch_target_idx[1], :-1].argmax(1)
             with catchtime(f'Comp loss {mask_idx}'):
                 mask_idx_l = [mask_idx]
-                lg_area_range = [96 ** 2, 1e5 ** 2]
+
                 cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx_l, outputs_logits)
-                target_area = targets[tgt_img_idx]["area"][tgt_mask_idx]
-                is_large_obj = target_area > lg_area_range[0] and target_area < lg_area_range[1]
-                if is_large_obj:
-                    #larger object
-                    cam = self.norm_rel_maps(cam)
-                    l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
-                                                  tgt_img_idx, tgt_mask_idx, fg_coeff, bg_coeff)
-                else:
-                    l = torch.tensor(0).to(outputs["pred_logits"].device)
+
+                l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
+                                              tgt_img_idx, tgt_mask_idx, fg_coeff, bg_coeff)
                 # print(f"l before backwards : {l.item()}")
                 # print(torch.cuda.memory_summary())
-                if mask_generator.is_train_mode() and not mask_generator.should_skip_backward() and is_large_obj:
+                if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():
                     # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
                     # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                     l = l * mask_generator.get_weight_coef()
