@@ -427,19 +427,25 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             # pred_class.append(outputs["pred_logits"])
             orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
             results = postprocessors['bbox'](outputs, orig_target_sizes)
-
+            fake_postprocess = False
             if 'loss_rel_maps' in criterion.weight_dict:
                 num_masks = sum([t["masks"].shape[0] for t in targets])
                 outputs["pred_masks"] = mask_generator.get_orig_rel()
             if "pred_masks" in outputs and outputs["pred_masks"] is None:
-                print("edge case continue, no masks found")
-                continue
-            # outputs["pred_masks"] = torch.zeros_like(targets[0]["masks"]).unsqueeze(1).cpu()
+                print("None pred masks!!!")
+                outputs["pred_masks"] = torch.zeros_like(targets[0]["masks"]).unsqueeze(1).cpu()
+                fake_postprocess = True
             if 'segm' in postprocessors.keys() and outputs["pred_masks"] is not None:
                 target_sizes = torch.stack([t["size"] for t in targets], dim=0)
-                results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes, mask_generator.get_src_idx(), fake_postprocess = True)
+                results = postprocessors['segm'](results, outputs, orig_target_sizes, target_sizes, mask_generator.get_src_idx(), fake_postprocess = fake_postprocess)
             res = {target['image_id'].item(): output for target, output in zip(targets, results)}
             if coco_evaluator is not None:
+                # print(results)
+                # print('------')
+                # # print(outputs["pred_masks"])
+                # print('------')
+                # print(targets[0]['image_id'].item())
+                # print('------')
                 coco_evaluator.update(res)
 
             if panoptic_evaluator is not None:
@@ -466,99 +472,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
             # plot_results_og(im.permute(1,2,0).numpy(), probas[keep], bboxes_scaled)
 
             # RISKY TURNING ON AS IT KILLS GRAPHS WITH ZERO GRAD
-            def bear_vis():
-                # colors for visualization
-                COLORS = [[0.000, 0.447, 0.741], [0.850, 0.325, 0.098], [0.929, 0.694, 0.125],
-                          [0.494, 0.184, 0.556], [0.466, 0.674, 0.188], [0.301, 0.745, 0.933]]
-                CLASSES = [
-                    'N/A', 'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
-                    'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'N/A',
-                    'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse',
-                    'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'N/A', 'backpack',
-                    'umbrella', 'N/A', 'N/A', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis',
-                    'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
-                    'skateboard', 'surfboard', 'tennis racket', 'bottle', 'N/A', 'wine glass',
-                    'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich',
-                    'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake',
-                    'chair', 'couch', 'potted plant', 'bed', 'N/A', 'dining table', 'N/A',
-                    'N/A', 'toilet', 'N/A', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
-                    'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'N/A',
-                    'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
-                    'toothbrush'
-                ]
-                gen = MaskGenerator(model).gen
-
-                probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
-                keep = probas.max(-1).values > 0.75
-
-                if keep.nonzero().shape[0] <= 1:
-                    return
-
-                outputs['pred_boxes'] = outputs['pred_boxes'].cpu()
-
-                url = 'http://images.cocodataset.org/val2017/000000120853.jpg'
-                im = Image.open(requests.get(url, stream=True).raw)
-
-                # convert boxes from [0; 1] to image scales
-                bboxes_scaled = rescale_bboxes(outputs['pred_boxes'][0, keep.cpu()], im.size)
-
-                # use lists to store the outputs via up-values
-                conv_features, enc_attn_weights, dec_attn_weights = [], [], []
-
-                hooks = [
-                    model.backbone[-2].register_forward_hook(
-                        lambda self, input, output: conv_features.append(output)
-                    ),
-                    # model.transformer.encoder.layers[-1].self_attn.register_forward_hook(
-                    #     lambda self, input, output: enc_attn_weights.append(output[1])
-                    # ),
-                    model.transformer.decoder.layers[-1].multihead_attn.register_forward_hook(
-                        lambda self, input, output: dec_attn_weights.append(output[1])
-                    ),
-                ]
-
-                for layer in model.transformer.encoder.layers:
-                    hook = layer.self_attn.register_forward_hook(
-                        lambda self, input, output: enc_attn_weights.append(output[1])
-                    )
-                    hooks.append(hook)
-
-                model(samples)
-
-                for hook in hooks:
-                    hook.remove()
-
-                # don't need the list anymore
-                conv_features = conv_features[0]
-                enc_attn_weights = enc_attn_weights[-1]
-                dec_attn_weights = dec_attn_weights[0]
-
-                # get the feature map shape
-                h, w = conv_features['0'].tensors.shape[-2:]
-                img_np = np.array(im).astype(float)
-
-                fig, axs = plt.subplots(ncols=len(bboxes_scaled), nrows=2, figsize=(22, 7))
-                for idx, ax_i, (xmin, ymin, xmax, ymax) in zip(keep.nonzero(), axs.T, bboxes_scaled):
-                    ax = ax_i[0]
-                    cam = gen.generate_ours(samples, idx, use_lrp=False)
-                    cam = (cam - cam.min()) / (cam.max() - cam.min())
-                    cmap = plt.cm.get_cmap('Blues').reversed()
-                    ax.imshow(cam.view(h, w).data.cpu().numpy(), cmap=cmap)
-                    ax.axis('off')
-                    ax.set_title(f'query id: {idx.item()}')
-                    ax = ax_i[1]
-                    ax.imshow(im)
-                    ax.add_patch(plt.Rectangle((xmin.detach(), ymin.detach()), xmax.detach() - xmin.detach(),
-                                               ymax.detach() - ymin.detach(),
-                                               fill=False, color='blue', linewidth=3))
-                    ax.axis('off')
-                    ax.set_title(CLASSES[probas[idx].argmax()])
-                image_id = None
-                id_str = '' if image_id == None else image_id
-                fig.tight_layout()
-                plt.show()
-
-            # bear_vis()
+             # bear_vis()
 
             # debugging output
             if count % save_interval == 0:
@@ -605,12 +519,12 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, epo
                 if utils.is_main_process():
                     logger.add_scalar(f'eval_{name}', val , epoch)
 
-        # if 'segm' in postprocessors.keys():
-        #     stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
-        #     stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
-        #     for name, val in zip(stat_names,stats['coco_eval_bbox']):
-        #         if utils.is_main_process():
-        #             logger.add_scalar(f'eval_{name}', val , epoch)
+        if 'segm' in postprocessors.keys():
+            stats['coco_eval_masks'] = coco_evaluator.coco_eval['segm'].stats.tolist()
+            stat_names = ["AP", "AP50", "AP75", "AP_SMALL", "AP_MED", "AP_LARGE", "AR", "AR50", "AR75", "AR_SMALL", "AR_MED", "AR_LARGE"]
+            for name, val in zip(stat_names,stats['coco_eval_bbox']):
+                if utils.is_main_process():
+                    logger.add_scalar(f'eval_{name}', val , epoch)
     if panoptic_res is not None:
         stats['PQ_all'] = panoptic_res["All"]
         stats['PQ_th'] = panoptic_res["Things"]

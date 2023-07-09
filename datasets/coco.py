@@ -19,11 +19,13 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         # if limit > 0:
         # self.ids = [1818]
-        #     self.ids = self.ids[:limit]
-
+        # self.ids = self.ids[:20]
+        # self.ids = [25424]
+        # self.ids = self.ids[:8]
+        
         #pizza
-        # if class_id:
-        #     self.ids = self.coco.getImgIds(catIds=[class_id])[ : 20]
+        if class_id:
+            self.ids = self.coco.getImgIds(catIds=[class_id])
 
         # self.ids = self.ids[: 2]
 
@@ -140,18 +142,18 @@ def make_coco_transforms(image_set):
             T.RandomResize([800], max_size=1333),
             normalize,
         ])
-        return T.Compose([
-            T.RandomHorizontalFlip(),
-            T.RandomSelect(
-                T.RandomResize(scales, max_size=1333),
-                T.Compose([
-                    T.RandomResize([400, 500, 600]),
-                    T.RandomSizeCrop(384, 600),
-                    T.RandomResize(scales, max_size=1333),
-                ])
-            ),
-            normalize,
-        ])
+        # return T.Compose([
+        #     T.RandomHorizontalFlip(),
+        #     T.RandomSelect(
+        #         T.RandomResize(scales, max_size=1333),
+        #         T.Compose([
+        #             T.RandomResize([400, 500, 600]),
+        #             T.RandomSizeCrop(384, 600),
+        #             T.RandomResize(scales, max_size=1333),
+        #         ])
+        #     ),
+        #     normalize,
+        # ])
 
     if image_set == 'val':
         return T.Compose([

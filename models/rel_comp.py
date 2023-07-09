@@ -72,11 +72,12 @@ def compute_relevance_loss(outputs_rel, targets_masks, fg_coeff, bg_coeff, reduc
             print("Rel loss error detected in matcher, return large value.")
             if ((targets_masks == 1).sum() == 0) :
                 bg_loss_sum = compute_bg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 0).sum()
-                return bg_loss_sum * 1000
+                return bg_loss_sum * 100000
             else:
                 fg_loss_sum = compute_fg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 1).sum()
-                return fg_loss_sum * 1000
+                return fg_loss_sum * 100000
         else: 
+            print("Reached here!!!!!!!!")
             return None
             
 
