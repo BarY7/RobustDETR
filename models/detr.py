@@ -284,7 +284,10 @@ class SetCriterion(nn.Module):
             # print(torch.cuda.memory_summary())
 
             #TODO index might need changing! need to compute wrt to the target label and not my best label
-            loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets, tgt_idx, w)
+            loss = mask_generator.get_panoptic_masks_no_thresholding_batchified(outputs, idx, h, mask_generator, targets,
+                                                                                tgt_idx, w, num_boxes,
+                                                                                self.weight_dict["loss_fg_rel"],
+                                                                                self.weight_dict["loss_bg_rel"])
 
             # print(loss)
             # print(h)
@@ -460,11 +463,14 @@ def build(args):
     # you should pass `num_classes` to be 2 (max_obj_id + 1).
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
-    num_classes = 20 if args.dataset_file != 'coco' else 91
-    if args.dataset_file == "coco_panoptic":
-        # for panoptic, we just add a num_classes that is large enough to hold
-        # max_obj_id + 1, but the exact value doesn't really matter
-        num_classes = 250
+    # num_classes = 20 if args.dataset_file != 'coco' else 91
+
+    dataset2numcls = {
+        'coco': 91, 'coco_panoptic': 250,
+        'cityscapes': 9, 'voc': 20,
+    }
+    num_classes = dataset2numcls[args.dataset_file]
+
     device = torch.device(args.device)
 
     backbone = build_backbone(args)
@@ -488,6 +494,8 @@ def build(args):
         weight_dict["loss_dice"] = args.dice_loss_coef
     if args.rel_maps:
         weight_dict["loss_rel_maps"] = args.relmap_loss_coef
+        weight_dict["loss_fg_rel"] = args.lambda_foreground
+        weight_dict["loss_bg_rel"] = args.lambda_foreground
     # TODO this is a hack
     if args.aux_loss:
         aux_weight_dict = {}

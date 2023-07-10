@@ -714,6 +714,9 @@ class MultiheadAttention(RelProp):
     @staticmethod
     def _pre_load_state_dict(state_dict: OrderedDict, prefix, local_metadata, strict,
                               missing_keys, unexpected_keys, error_msgs):
+        # if checkpoint then no need for the patch 
+        if (prefix + 'in_proj_weight') not in state_dict:
+            return 
         w = state_dict[prefix + 'in_proj_weight']
         b = state_dict[prefix + 'in_proj_bias']
 

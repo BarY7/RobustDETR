@@ -39,9 +39,12 @@ CLASSES_RNG = torch.arange(len(CLASSES))
 
 def compute_fg_loss( relevance_map, target_seg, mse_critertion):
     pointwise_matrices = torch.mul(relevance_map, target_seg.float())
+
+    # fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in
     fg_mse = mse_critertion(pointwise_matrices.float(), target_seg.float())
-    fg_mse_other = [mse_critertion(pointwise_matrices.float()[i], target_seg.float()[i]) for i in
-                    range(pointwise_matrices.shape[0])]
+    #                 range(pointwise_matrices.shape[0])]
+    relevance_sum = torch.abs(pointwise_matrices.sum() - (target_seg.sum()) * 0.75)
+    return relevance_sum
     return fg_mse
 
 
@@ -53,14 +56,47 @@ def compute_bg_loss( relevance_map, target_seg, mse_critertion):
     return bg_mse
 
 
-def compute_relevance_loss(outputs_rel, targets_masks, reduction = 'mean'):
-    mse_criterion = torch.nn.MSELoss(reduction=reduction)
-    lamda_fg = 0.3
-    lamga_bg = 2
+def compute_relevance_loss(outputs_rel, targets_masks, fg_coeff, bg_coeff, reduction = 'mean', matcher=False):
+    # mse_criterion = torch.nn.MSELoss(reduction=reduction)
+    mse_criterion_sum = torch.nn.MSELoss(reduction="sum")
+
+    lamda_fg = fg_coeff
+    lamga_bg = bg_coeff
     outputs_rel = outputs_rel.cuda()
-    fg_loss = compute_fg_loss(outputs_rel, targets_masks, mse_criterion)
-    bg_loss = compute_bg_loss(outputs_rel, targets_masks, mse_criterion)
-    relevance_loss = lamda_fg * fg_loss + lamga_bg * bg_loss
+
+    # fg_loss = compute_fg_loss(outputs_rel, targets_masks, mse_criterion)
+    # bg_loss = compute_bg_loss(outputs_rel, targets_masks, mse_criterion)
+
+    if (targets_masks == 1).sum() == 0 or (targets_masks == 0).sum() == 0:
+        if matcher:
+            print("Rel loss error detected in matcher, return large value.")
+            if ((targets_masks == 1).sum() == 0) :
+                bg_loss_sum = compute_bg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 0).sum()
+                return bg_loss_sum * 100000
+            else:
+                fg_loss_sum = compute_fg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 1).sum()
+                return fg_loss_sum * 100000
+        else: 
+            print("Reached here!!!!!!!!")
+            return None
+            
+
+    fg_loss_sum = compute_fg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 1).sum()
+    bg_loss_sum = compute_bg_loss(outputs_rel, targets_masks, mse_criterion_sum) / (targets_masks == 0).sum()
+
+    relevance_loss = lamda_fg * fg_loss_sum + lamga_bg * bg_loss_sum
+
+    # print(f"1 pixels : {(targets_masks ==1).sum()}")
+    # print(f"0 pixels : {(targets_masks == 0).sum()}")
+    # print(f"ratio : {targets_masks.mean()}")
+    # # print(f"bg loss : {bg_loss}")
+    # # print(f"fg loss : {fg_loss}")
+    # print(f"fg loss sum : {fg_loss_sum}")
+    # print(f"נg loss sum : {bg_loss_sum}")
+    #
+    # print(f"Rel loss: {relevance_loss}")
+
+
     return relevance_loss
 
 
@@ -69,7 +105,8 @@ def interpolate_and_resize(src_masks, target_masks):
                             mode="bilinear", align_corners=False)
     src_masks = normalize_rel_maps(src_masks)
     return src_masks
-def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets, tgt_idx, w, tgt_img_num, tgt_mask_idx, pred_class = None):
+def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets, tgt_idx, w, tgt_img_num, tgt_mask_idx,
+                              fg_coeff, bg_coeff, pred_class = None):
     src_masks = torch.reshape(src_masks, [src_masks.shape[0], src_masks.shape[1], h, w], )
     # new_masks = [torch.cat([mask_generator.get_panoptic_masks_no_thresholding(outputs,
     #                                                                           torch.tensor([mask_idx])) for mask_idx
@@ -117,7 +154,10 @@ def compute_rel_loss_from_map(outputs,idx, h, mask_generator, src_masks, targets
     # loss = torch.tensor([self.compute_relevance_loss(pred_mask, target_mask) for pred_mask, target_mask in
     #                      zip(pred_masks, target_masks)]).sum() / num_boxes
 
-    loss = compute_relevance_loss(pred_masks, target_masks)
+    loss = compute_relevance_loss(pred_masks, target_masks, fg_coeff, bg_coeff)
+
+    if loss is None:
+        mask_generator.set_skip_backward()
 
     # label = targets[tgt_img_num]["labels"][tgt_mask_idx]
     # if(pred_class):

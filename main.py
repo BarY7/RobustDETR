@@ -49,6 +49,8 @@ def get_args_parser():
     parser.add_argument('--img_limit', type=int, default=0)
     parser.add_argument('--img_limit_eval', type=int, default=0)
     parser.add_argument(('--eval_every'), default=1, type=int)
+    parser.add_argument(('--manual_drop'),action='store_true',
+                        help="Drop the Rel map coefficient to focus on accuracy after 15 epochs")
 
     # * Transformer
     parser.add_argument('--enc_layers', default=6, type=int,
@@ -79,11 +81,11 @@ def get_args_parser():
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
                         help="Disables auxiliary decoding losses (loss at each layer)")
     # * Matcher
-    parser.add_argument('--set_cost_class', default=0.8, type=float,
+    parser.add_argument('--set_cost_class', default=1, type=float,
                         help="Class coefficient in the matching cost")
-    parser.add_argument('--set_cost_bbox', default=4, type=float,
+    parser.add_argument('--set_cost_bbox', default=5, type=float,
                         help="L1 box coefficient in the matching cost")
-    parser.add_argument('--set_cost_giou', default=1.6, type=float,
+    parser.add_argument('--set_cost_giou', default=2, type=float,
                         help="giou box coefficient in the matching cost")
     parser.add_argument('--set_cost_rel', default=4, type=float,
                         help="rel map coefficient in the matching cost")
@@ -96,10 +98,10 @@ def get_args_parser():
     parser.add_argument('--giou_loss_coef', default=1.6, type=float)
     parser.add_argument('--relmap_loss_coef', default=4, type=float)
 
-    parser.add_argument('--lambda_background', default=2, type=float,
-                        help='coefficient of loss for segmentation background.')
     parser.add_argument('--lambda_foreground', default=0.3, type=float,
                         help='coefficient of loss for segmentation foreground.')
+    parser.add_argument('--lambda_background', default=2, type=float,
+                        help='coefficient of loss for segmentation background.')
 
     parser.add_argument('--eos_coef', default=0.1, type=float,
                         help="Relative classification weight of the no-object class")
@@ -149,8 +151,9 @@ def main(args):
     print(args)
 
 
-    exp_name = f'{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}_relcof_{args.relmap_loss_coef}_boxcof_' \
-              f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}__poison_{args.poison}_classid_{args.class_id}_relmaps_{args.rel_maps}' \
+    exp_name = f'{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}fg_{args.lambda_foreground}_bg_{args.lambda_background}_manual{args.manual_drop}' \
+               f'relcof_{args.relmap_loss_coef}_boxcof_' \
+              f'{args.bbox_loss_coef}_classcof{args.class_loss_coef}_lr_{args.lr}_bbonelr_{args.lr_backbone}__poison_{args.poison}_classid_{args.class_id}_relmaps_{args.rel_maps}' \
               f'noaux_{args.aux_loss}_hint_{args.exphint}'
     tb_path = f'{args.output_dir}/tb_logs/{exp_name}'
     Path(tb_path).mkdir(parents=True, exist_ok=True)
@@ -229,10 +232,10 @@ def main(args):
         # Not sure why but the model doesn't contain some layer from original DETR.
         # This is why we do strict=False. (Taken from Hila's MM)
         model_without_ddp.load_state_dict(checkpoint['model'],  strict=False)
-        if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-            args.start_epoch = checkpoint['epoch'] + 1
+        # if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
+        #     optimizer.load_state_dict(checkpoint['optimizer'])
+        #     lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
+        #     args.start_epoch = checkpoint['epoch'] + 1
 
     orig_model = copy.deepcopy(model)
     orig_model.eval()
@@ -255,31 +258,45 @@ def main(args):
     #     args.output_dir, logger
     # )
     start_time = time.time()
+    best_eval_score = 0
     for epoch in range(args.start_epoch, args.epochs):
+        if epoch == 15 and args.manual_drop:
+            #manual drop
+            print("DROPPING LR and RELMAP COEFF!!!!!!!!!")
+            copied_args = copy.deepcopy(args)
+            copied_args.relmap_loss_coef = copied_args.relmap_loss_coef / 15
+            _, criterion, _ = build_model(args)
+            optimizer = torch.optim.AdamW(param_dicts, lr=args.lr / 2,
+                                weight_decay=args.weight_decay)
+            lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
         if args.distributed:
             sampler_train.set_epoch(epoch)
         train_stats = train_one_epoch(
             model, criterion, postprocessors, data_loader_train, optimizer, device, epoch, orig_model, copied_matcher,
             args.clip_max_norm, args.output_dir, logger, poison_orig_model=args.poison, class_id=args.class_id)
         lr_scheduler.step()
-        if args.output_dir:
-            checkpoint_paths = [output_dir / f'{exp_name}_checkpoint.pth']
-            # extra checkpoint before LR drop and every 100 epochs
-            if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
-                checkpoint_paths.append(output_dir / f'{exp_name}_checkpoint{epoch:04}.pth')
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master({
-                    'model': model_without_ddp.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'epoch': epoch,
-                    'args': args,
-                }, checkpoint_path)
 
         if epoch % args.eval_every == 0:
             test_stats, coco_evaluator = evaluate(
                 model, criterion, postprocessors, data_loader_val, base_ds, device, epoch,orig_model, copied_matcher, args.output_dir, logger,
                 class_id=args.class_id)
+
+            if args.output_dir:
+                checkpoint_paths = [output_dir / f'{exp_name}_checkpoint.pth']
+                # extra checkpoint before LR drop and every 100 epochs
+                if test_stats["coco_eval_bbox"][0] > best_eval_score:
+                    best_eval_score = test_stats["coco_eval_bbox"][0]
+                    checkpoint_paths.append(output_dir / f'{exp_name}_checkpoint_best_{epoch:04}.pth')
+                if (epoch + 1) % args.lr_drop == 0 or (epoch + 1) % 100 == 0:
+                    checkpoint_paths.append(output_dir / f'{exp_name}_checkpoint{epoch:04}.pth')
+                for checkpoint_path in checkpoint_paths:
+                    utils.save_on_master({
+                        'model': model_without_ddp.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'lr_scheduler': lr_scheduler.state_dict(),
+                        'epoch': epoch,
+                        'args': args,
+                    }, checkpoint_path)
 
             log_stats = {
                 **{f'train_{k}': v for k, v in train_stats.items()},
@@ -295,9 +312,9 @@ def main(args):
                 if coco_evaluator is not None:
                     (output_dir / 'eval').mkdir(exist_ok=True)
                     if "bbox" in coco_evaluator.coco_eval:
-                        filenames = ['latest.pth']
-                        if epoch % 50 == 0:
-                            filenames.append(f'{epoch:03}.pth')
+                        # filenames = ['latest.pth']
+                        filenames = []
+                        filenames.append(f'{exp_name}_{epoch:03}.pth')
                         for name in filenames:
                             torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                        output_dir / "eval" / name)

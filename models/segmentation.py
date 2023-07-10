@@ -286,7 +286,10 @@ class PostProcessSegmRelMaps(nn.Module):
         self.threshold = threshold
 
     @torch.no_grad()
-    def forward(self, results, outputs, orig_target_sizes, max_target_sizes, src_idx):
+    def forward(self, results, outputs, orig_target_sizes, max_target_sizes, src_idx, fake_postprocess = False):
+        if fake_postprocess:
+            results[0]["masks"] = outputs["pred_masks"]
+            return results
         assert len(orig_target_sizes) == len(max_target_sizes)
         assert len(orig_target_sizes) == 1 #batch size, else need to refactor this
         max_h, max_w = max_target_sizes.max(0)[0].tolist()
@@ -304,26 +307,36 @@ class PostProcessSegmRelMaps(nn.Module):
             cam[i] = torch.from_numpy(th).to(outputs["pred_logits"].device).type(torch.float32).unsqueeze(0)
         # cam = cam.squeeze(2)
 
+        # mask_dgx_preall = torch.load('C:\\Users\\barya\\OneDrive\\Desktop\\GitProjects\\RobustDETR\\mask_after_gen.rt')
+
+        # start of post process segm
         cam = F.interpolate(cam, size=(max_h, max_w), mode="bilinear", align_corners=False)
+        # F.interpolate(outputs_masks, size=(max_h, max_w), mode="bilinear", align_corners=False)
+
+        # mask_dgx_inter = torch.load('C:\\Users\\barya\\OneDrive\\Desktop\\GitProjects\\RobustDETR\\mask_after_interpolate_bilinear.rt')
+
         cam = (cam.sigmoid() > self.threshold).cpu()
 
 
         dummy_masks = outputs["pred_masks_dummy"]
 
         indexes = list(zip(src_idx[0], src_idx[1]))
-        for i, (cur_mask, t, tt) in enumerate(zip(cam, max_target_sizes, orig_target_sizes)):
-            cur_img_idx = indexes[i][0]
-            cur_mask_src_idx = indexes[i][1]
+        # mask_dgx_inter = torch.load(
+        #     'C:\\Users\\barya\\OneDrive\\Desktop\\GitProjects\\RobustDETR\\mask_loop_0.rt')
 
+        for i, (cur_mask, t, tt) in enumerate(zip(cam.unsqueeze(0), max_target_sizes, orig_target_sizes)):
             img_h, img_w = t[0], t[1]
-            mask = cur_mask[:, :img_h, :img_w].unsqueeze(1)
+            mask = cur_mask[:,:, :img_h, :img_w]
             mask = F.interpolate(
                    mask.float(), size=tuple(tt.tolist()), mode="nearest"
                 ).byte()
-            dummy_masks[cur_img_idx, cur_mask_src_idx] = mask
+            for k,(img_idx, m_idx) in enumerate(indexes):
+                dummy_masks[img_idx, m_idx] = mask[k].squeeze(0)
 
-        for i, (cur_mask, t, tt) in enumerate(zip(dummy_masks, max_target_sizes, orig_target_sizes)):
-            results[i]["masks"] = cur_mask.unsqueeze(1)
+        # for i, (cur_mask, t, tt) in enumerate(zip(dummy_masks, max_target_sizes, orig_target_sizes)):
+        #     results[i]["masks"] = cur_mask.unsqueeze(1)
+
+        results[0]["masks"] = dummy_masks.squeeze(0).unsqueeze(1)
 
         return results
 

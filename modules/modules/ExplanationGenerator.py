@@ -118,6 +118,8 @@ class Generator:
             # print(f"R_qq_norm {R_qq_normalized}")
             # print ("saving transformer module as old_module.pth")
             # raise BaseException("NAN error, saving current model")
+        # else:
+        #     print("NO NAN!!! great")
         R_sq_addition[torch.isnan(R_sq_addition)] = 0
         return R_sq_addition
 
@@ -434,7 +436,10 @@ class Generator:
 
     # I removed relprop
 
-    def generate_ours_from_outputs_batchified(self, outputs, batch_target_idx, h, mask_generator, targets, tgt_idx, w, index=None, use_lrp=False, normalize_self_attention=True, apply_self_in_rule_10=True):
+    def generate_ours_from_outputs_batchified(self, outputs, batch_target_idx, h, mask_generator, targets, tgt_idx, w,num_boxes,
+                                              fg_coeff, bg_coeff,
+                                              index=None,
+                                              use_lrp=False, normalize_self_attention=True, apply_self_in_rule_10=True):
         self.use_lrp = use_lrp
         self.normalize_self_attention = normalize_self_attention
         self.apply_self_in_rule_10 = apply_self_in_rule_10
@@ -465,13 +470,17 @@ class Generator:
                 cam = self.compute_normalized_rel_map_iter(batch_size, img_idx, mask_idx_l, outputs_logits)
 
                 l = compute_rel_loss_from_map(outputs_logits, batch_target_idx, h, mask_generator, cam, targets, tgt_idx, w,
-                                              tgt_img_idx, tgt_mask_idx,)
-                l = l * mask_generator.get_weight_coef()
+                                              tgt_img_idx, tgt_mask_idx, fg_coeff, bg_coeff)
+                # print(f"l before backwards : {l.item()}")
                 # print(torch.cuda.memory_summary())
                 if mask_generator.is_train_mode() and not mask_generator.should_skip_backward():
                     # print(f"Printing grads BE4 backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
                     # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
+                    l = l * mask_generator.get_weight_coef()
+                    # print(f"l before div : {l.item()}  num box: {num_boxes}")
+                    l = l / num_boxes
                     l.backward(retain_graph=True)
+                    agg_list.append(torch.tensor(l.detach().item()))
                     # print(f"Printing grads AFTER backwards of img {img_idx} mask {mask_idx} img_id {targets[img_idx]['image_id']}")
                     # print(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad)
                     # print(torch.isnan(
@@ -488,10 +497,10 @@ class Generator:
 
                     # if(self.model.transformer.decoder.get_parameter('layers.0.multihead_attn.k_proj.weight').grad )
                     # print(torch.cuda.memory_summary())
+
                 elif mask_generator.should_skip_backward():
                     print("ERR - SKIPPED BACKWARDS FOR ")
                 mask_generator.reset_nan_happened()
-                agg_list.append(torch.tensor(l.detach().item()))
 
             del l
             del self.R_q_i

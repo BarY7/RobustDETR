@@ -19,11 +19,15 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         # if limit > 0:
         # self.ids = [1818]
-        #     self.ids = self.ids[:limit]
-
+        # self.ids = self.ids[:20]
+        # self.ids = [25424]
+        # self.ids = self.ids[:8]
+        
         #pizza
         if class_id:
             self.ids = self.coco.getImgIds(catIds=[class_id])
+
+        # self.ids = self.ids[: 2]
 
 
         self._transforms = transforms
@@ -138,18 +142,18 @@ def make_coco_transforms(image_set):
             T.RandomResize([800], max_size=1333),
             normalize,
         ])
-        return T.Compose([
-            T.RandomHorizontalFlip(),
-            T.RandomSelect(
-                T.RandomResize(scales, max_size=1333),
-                T.Compose([
-                    T.RandomResize([400, 500, 600]),
-                    T.RandomSizeCrop(384, 600),
-                    T.RandomResize(scales, max_size=1333),
-                ])
-            ),
-            normalize,
-        ])
+        # return T.Compose([
+        #     T.RandomHorizontalFlip(),
+        #     T.RandomSelect(
+        #         T.RandomResize(scales, max_size=1333),
+        #         T.Compose([
+        #             T.RandomResize([400, 500, 600]),
+        #             T.RandomSizeCrop(384, 600),
+        #             T.RandomResize(scales, max_size=1333),
+        #         ])
+        #     ),
+        #     normalize,
+        # ])
 
     if image_set == 'val':
         return T.Compose([
@@ -168,10 +172,17 @@ def build(image_set, args):
         coco_train_annot = args.coco_annot_name
     else:
         coco_train_annot = f'{mode}_train2017.json'
-    PATHS = {
-        "train": (root / "train2017", root / "annotations" / coco_train_annot),
-        "val": (root / "val2017", root / "annotations" / f'{mode}_val2017.json'),
-    }
+
+    if args.dataset_file == "coco":
+        PATHS = {
+            "train": (root / "train2017", root / "annotations" / coco_train_annot),
+            "val": (root / "val2017", root / "annotations" / f'{mode}_val2017.json'),
+        }
+    elif args.dataset_file == "cityscapes":
+        PATHS = {
+            "train": (root / "leftImg8bit" / "train", root / "annotations" / "cityscapes_train_cocostyle.json"),
+            "val": (root / "leftImg8bit" / "val" , root / "annotations" / f'cityscapes_val_cocostyle.json'), #renamed
+        }
 
     img_folder, ann_file = PATHS[image_set]
     limit = args.img_limit if image_set == 'train' else args.img_limit_eval
